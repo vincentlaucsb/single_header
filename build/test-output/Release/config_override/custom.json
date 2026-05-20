@@ -1,8 +1,0 @@
-{
-  "includeRoots": ["E:/GitHub/single_header/tests/fixtures/csv_style/include"],
-  "output": "E:/GitHub/single_header/build/test-output/Release/config_override/generated/from_config.hpp",
-  "rewriteMacros": {
-    "CSV_INLINE": "wrong"
-  },
-  "implementationMarker": "NEVER_MATCH"
-}

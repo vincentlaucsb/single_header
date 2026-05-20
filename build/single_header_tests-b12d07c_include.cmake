@@ -1,5 +1,0 @@
-if(EXISTS "E:/GitHub/single_header/build/single_header_tests-b12d07c_tests.cmake")
-  include("E:/GitHub/single_header/build/single_header_tests-b12d07c_tests.cmake")
-else()
-  add_test(single_header_tests_NOT_BUILT-b12d07c single_header_tests_NOT_BUILT-b12d07c)
-endif()

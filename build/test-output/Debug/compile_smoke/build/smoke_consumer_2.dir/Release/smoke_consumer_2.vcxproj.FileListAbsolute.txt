@@ -1,1 +1,0 @@
-E:\GitHub\single_header\build\test-output\Debug\compile_smoke\build\smoke_consumer_2.dir\Release\smoke_consumer_2.lib

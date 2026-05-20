@@ -1,3 +1,0 @@
-1:generates golden output for a small fake library
-2:generates golden output for csv-parser style fixture
-3:generated header compiles in multiple translation units

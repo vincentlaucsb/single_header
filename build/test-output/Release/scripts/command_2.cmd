@@ -1,2 +1,0 @@
-@echo off
-"C:/Program Files/CMake/bin/cmake.exe" --build "E:/GitHub/single_header/build/test-output/Release\compile_smoke\build" --config Release
