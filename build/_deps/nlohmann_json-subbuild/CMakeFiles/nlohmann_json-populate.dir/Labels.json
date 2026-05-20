@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "E:/GitHub/single_header/build/_deps/nlohmann_json-subbuild/CMakeFiles/nlohmann_json-populate"
+		},
+		{
+			"file" : "E:/GitHub/single_header/build/_deps/nlohmann_json-subbuild/CMakeFiles/b000fc50244dbb438deda300a7dd4382/nlohmann_json-populate.rule"
+		},
+		{
+			"file" : "E:/GitHub/single_header/build/_deps/nlohmann_json-subbuild/CMakeFiles/4716c7fba44b87451e846824751f31a3/nlohmann_json-populate-complete.rule"
+		},
+		{
+			"file" : "E:/GitHub/single_header/build/_deps/nlohmann_json-subbuild/CMakeFiles/008166399e1790fdbeb7f99fba8b8011/nlohmann_json-populate-build.rule"
+		},
+		{
+			"file" : "E:/GitHub/single_header/build/_deps/nlohmann_json-subbuild/CMakeFiles/008166399e1790fdbeb7f99fba8b8011/nlohmann_json-populate-configure.rule"
+		},
+		{
+			"file" : "E:/GitHub/single_header/build/_deps/nlohmann_json-subbuild/CMakeFiles/008166399e1790fdbeb7f99fba8b8011/nlohmann_json-populate-download.rule"
+		},
+		{
+			"file" : "E:/GitHub/single_header/build/_deps/nlohmann_json-subbuild/CMakeFiles/008166399e1790fdbeb7f99fba8b8011/nlohmann_json-populate-install.rule"
+		},
+		{
+			"file" : "E:/GitHub/single_header/build/_deps/nlohmann_json-subbuild/CMakeFiles/008166399e1790fdbeb7f99fba8b8011/nlohmann_json-populate-mkdir.rule"
+		},
+		{
+			"file" : "E:/GitHub/single_header/build/_deps/nlohmann_json-subbuild/CMakeFiles/008166399e1790fdbeb7f99fba8b8011/nlohmann_json-populate-patch.rule"
+		},
+		{
+			"file" : "E:/GitHub/single_header/build/_deps/nlohmann_json-subbuild/CMakeFiles/008166399e1790fdbeb7f99fba8b8011/nlohmann_json-populate-test.rule"
+		},
+		{
+			"file" : "E:/GitHub/single_header/build/_deps/nlohmann_json-subbuild/CMakeFiles/008166399e1790fdbeb7f99fba8b8011/nlohmann_json-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"nlohmann_json-populate"
+		],
+		"name" : "nlohmann_json-populate"
+	}
+}

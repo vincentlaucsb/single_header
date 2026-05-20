@@ -1,0 +1,10 @@
+^E:\GITHUB\SINGLE_HEADER\BUILD\_DEPS\NLOHMANN_JSON-SUBBUILD\CMAKEFILES\B000FC50244DBB438DEDA300A7DD4382\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SE:/GitHub/single_header/build/_deps/nlohmann_json-subbuild -BE:/GitHub/single_header/build/_deps/nlohmann_json-subbuild --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file E:/GitHub/single_header/build/_deps/nlohmann_json-subbuild/nlohmann_json-populate.slnx
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

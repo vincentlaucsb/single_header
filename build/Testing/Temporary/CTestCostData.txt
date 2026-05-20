@@ -1,0 +1,9 @@
+golden.simple 5 0.0209579
+golden.csv_style 5 0.0105671
+compile_smoke 4 0.788018
+generates golden output for a small fake library 9 0.0111634
+generates golden output for csv-parser style fixture 9 0.00810893
+generated header compiles in multiple translation units 9 0.321243
+loads single_header.json from the working directory by convention 7 0.00665607
+explicit CLI flags override JSON config values 7 0.00703286
+---

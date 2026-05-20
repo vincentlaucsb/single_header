@@ -1,0 +1,129 @@
+Start testing: May 19 22:30 US Mountain Standard Time
+----------------------------------------------------------
+1/5 Testing: generates golden output for a small fake library
+1/5 Test: generates golden output for a small fake library
+Command: "E:/GitHub/single_header/build/Release/single_header_tests.exe" "generates golden output for a small fake library"
+Directory: E:/GitHub/single_header/build
+"generates golden output for a small fake library" start time: May 19 22:30 US Mountain Standard Time
+Output:
+----------------------------------------------------------
+Filters: "generates golden output for a small fake library"
+Randomness seeded to: 1661650827
+===============================================================================
+All tests passed (2 assertions in 1 test case)
+
+<end of output>
+Test time =   0.10 sec
+----------------------------------------------------------
+Test Passed.
+"generates golden output for a small fake library" end time: May 19 22:30 US Mountain Standard Time
+"generates golden output for a small fake library" time elapsed: 00:00:00
+----------------------------------------------------------
+
+2/5 Testing: generates golden output for csv-parser style fixture
+2/5 Test: generates golden output for csv-parser style fixture
+Command: "E:/GitHub/single_header/build/Release/single_header_tests.exe" "generates golden output for csv-parser style fixture"
+Directory: E:/GitHub/single_header/build
+"generates golden output for csv-parser style fixture" start time: May 19 22:30 US Mountain Standard Time
+Output:
+----------------------------------------------------------
+Filters: "generates golden output for csv-parser style fixture"
+Randomness seeded to: 3848355926
+===============================================================================
+All tests passed (2 assertions in 1 test case)
+
+<end of output>
+Test time =   0.07 sec
+----------------------------------------------------------
+Test Passed.
+"generates golden output for csv-parser style fixture" end time: May 19 22:30 US Mountain Standard Time
+"generates golden output for csv-parser style fixture" time elapsed: 00:00:00
+----------------------------------------------------------
+
+3/5 Testing: generated header compiles in multiple translation units
+3/5 Test: generated header compiles in multiple translation units
+Command: "E:/GitHub/single_header/build/Release/single_header_tests.exe" "generated header compiles in multiple translation units"
+Directory: E:/GitHub/single_header/build
+"generated header compiles in multiple translation units" start time: May 19 22:30 US Mountain Standard Time
+Output:
+----------------------------------------------------------
+-- Selecting Windows SDK version 10.0.26100.0 to target Windows 10.0.26200.
+-- The CXX compiler identification is MSVC 19.50.35730.0
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/cl.exe - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Configuring done (1.6s)
+-- Generating done (0.0s)
+CMake Warning:
+  Manually-specified variables were not used by the project:
+
+    CMAKE_BUILD_TYPE
+
+
+-- Build files have been written to: E:/GitHub/single_header/build/test-output/Release/compile_smoke/build
+MSBuild version 18.5.4+cb4e32d21 for .NET Framework
+
+  1>Checking Build System
+  Building Custom Rule E:/GitHub/single_header/build/test-output/Release/compile_smoke/project/CMakeLists.txt
+  tu1.cpp
+  smoke_consumer_1.vcxproj -> E:\GitHub\single_header\build\test-output\Release\compile_smoke\build\smoke_consumer_1.dir\Release\smoke_consumer_1.lib
+  Building Custom Rule E:/GitHub/single_header/build/test-output/Release/compile_smoke/project/CMakeLists.txt
+  tu2.cpp
+  smoke_consumer_2.vcxproj -> E:\GitHub\single_header\build\test-output\Release\compile_smoke\build\smoke_consumer_2.dir\Release\smoke_consumer_2.lib
+  Building Custom Rule E:/GitHub/single_header/build/test-output/Release/compile_smoke/project/CMakeLists.txt
+Filters: "generated header compiles in multiple translation units"
+Randomness seeded to: 2147739149
+===============================================================================
+All tests passed (3 assertions in 1 test case)
+
+<end of output>
+Test time =   2.89 sec
+----------------------------------------------------------
+Test Passed.
+"generated header compiles in multiple translation units" end time: May 19 22:30 US Mountain Standard Time
+"generated header compiles in multiple translation units" time elapsed: 00:00:02
+----------------------------------------------------------
+
+4/5 Testing: loads single_header.json from the working directory by convention
+4/5 Test: loads single_header.json from the working directory by convention
+Command: "E:/GitHub/single_header/build/Release/single_header_tests.exe" "loads single_header.json from the working directory by convention"
+Directory: E:/GitHub/single_header/build
+"loads single_header.json from the working directory by convention" start time: May 19 22:30 US Mountain Standard Time
+Output:
+----------------------------------------------------------
+Filters: "loads single_header.json from the working directory by convention"
+Randomness seeded to: 2853797589
+===============================================================================
+All tests passed (2 assertions in 1 test case)
+
+<end of output>
+Test time =   0.05 sec
+----------------------------------------------------------
+Test Passed.
+"loads single_header.json from the working directory by convention" end time: May 19 22:30 US Mountain Standard Time
+"loads single_header.json from the working directory by convention" time elapsed: 00:00:00
+----------------------------------------------------------
+
+5/5 Testing: explicit CLI flags override JSON config values
+5/5 Test: explicit CLI flags override JSON config values
+Command: "E:/GitHub/single_header/build/Release/single_header_tests.exe" "explicit CLI flags override JSON config values"
+Directory: E:/GitHub/single_header/build
+"explicit CLI flags override JSON config values" start time: May 19 22:30 US Mountain Standard Time
+Output:
+----------------------------------------------------------
+Filters: "explicit CLI flags override JSON config values"
+Randomness seeded to: 4215774788
+===============================================================================
+All tests passed (3 assertions in 1 test case)
+
+<end of output>
+Test time =   0.05 sec
+----------------------------------------------------------
+Test Passed.
+"explicit CLI flags override JSON config values" end time: May 19 22:30 US Mountain Standard Time
+"explicit CLI flags override JSON config values" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: May 19 22:30 US Mountain Standard Time

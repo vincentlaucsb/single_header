@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.20)
+project(smoke_consumer LANGUAGES CXX)
+add_library(smoke_consumer_1 OBJECT tu1.cpp)
+add_library(smoke_consumer_2 OBJECT tu2.cpp)
+target_compile_features(smoke_consumer_1 PRIVATE cxx_std_17)
+target_compile_features(smoke_consumer_2 PRIVATE cxx_std_17)
+target_include_directories(smoke_consumer_1 PRIVATE "E:/GitHub/single_header/build/test-output/Debug/compile_smoke/generated")
+target_include_directories(smoke_consumer_2 PRIVATE "E:/GitHub/single_header/build/test-output/Debug/compile_smoke/generated")

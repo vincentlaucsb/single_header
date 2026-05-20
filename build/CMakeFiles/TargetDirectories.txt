@@ -1,0 +1,16 @@
+E:/GitHub/single_header/build/CMakeFiles/single_header.dir
+E:/GitHub/single_header/build/CMakeFiles/Experimental.dir
+E:/GitHub/single_header/build/CMakeFiles/Nightly.dir
+E:/GitHub/single_header/build/CMakeFiles/Continuous.dir
+E:/GitHub/single_header/build/CMakeFiles/NightlyMemoryCheck.dir
+E:/GitHub/single_header/build/CMakeFiles/single_header_tests.dir
+E:/GitHub/single_header/build/CMakeFiles/RUN_TESTS.dir
+E:/GitHub/single_header/build/CMakeFiles/ALL_BUILD.dir
+E:/GitHub/single_header/build/CMakeFiles/ZERO_CHECK.dir
+E:/GitHub/single_header/build/_deps/nlohmann_json-build/CMakeFiles/RUN_TESTS.dir
+E:/GitHub/single_header/build/_deps/nlohmann_json-build/CMakeFiles/ALL_BUILD.dir
+E:/GitHub/single_header/build/_deps/catch2-build/CMakeFiles/RUN_TESTS.dir
+E:/GitHub/single_header/build/_deps/catch2-build/CMakeFiles/ALL_BUILD.dir
+E:/GitHub/single_header/build/_deps/catch2-build/src/CMakeFiles/Catch2.dir
+E:/GitHub/single_header/build/_deps/catch2-build/src/CMakeFiles/Catch2WithMain.dir
+E:/GitHub/single_header/build/_deps/catch2-build/src/CMakeFiles/RUN_TESTS.dir

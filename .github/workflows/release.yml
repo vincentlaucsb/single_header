@@ -1,0 +1,91 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to upload assets to
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  binaries:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            runner: ubuntu-24.04
+            executable: build/single_header
+            binary_name: single_header
+            archive: tar.gz
+          - target: windows-x86_64
+            runner: windows-2025
+            executable: build/Release/single_header.exe
+            binary_name: single_header.exe
+            archive: zip
+          - target: macos-x86_64
+            runner: macos-15-intel
+            executable: build/single_header
+            binary_name: single_header
+            archive: tar.gz
+          - target: macos-arm64
+            runner: macos-15
+            executable: build/single_header
+            binary_name: single_header
+            archive: tar.gz
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build --build-config Release --output-on-failure
+
+      - name: Package
+        id: package
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.release.tag_name }}"
+          if (-not $tag) {
+            $tag = "${{ inputs.tag }}"
+          }
+          if (-not $tag) {
+            throw "No release tag is available."
+          }
+
+          $target = "${{ matrix.target }}"
+          $packageName = "single_header-$tag-$target"
+          $stage = Join-Path "dist" $packageName
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+
+          Copy-Item -LiteralPath "${{ matrix.executable }}" -Destination (Join-Path $stage "${{ matrix.binary_name }}")
+          Copy-Item -LiteralPath "README.md" -Destination $stage
+
+          if ("${{ matrix.archive }}" -eq "zip") {
+            $archive = Join-Path "dist" "$packageName.zip"
+            Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $archive -Force
+          } else {
+            $archive = Join-Path "dist" "$packageName.tar.gz"
+            tar -czf $archive -C "dist" $packageName
+          }
+
+          "archive=$archive" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
+      - name: Upload release asset
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ steps.package.outputs.tag }}" "${{ steps.package.outputs.archive }}" --clobber

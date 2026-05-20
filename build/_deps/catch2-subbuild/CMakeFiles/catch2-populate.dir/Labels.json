@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "E:/GitHub/single_header/build/_deps/catch2-subbuild/CMakeFiles/catch2-populate"
+		},
+		{
+			"file" : "E:/GitHub/single_header/build/_deps/catch2-subbuild/CMakeFiles/a31db7e0830b4c2794cd6e0bee9c3106/catch2-populate.rule"
+		},
+		{
+			"file" : "E:/GitHub/single_header/build/_deps/catch2-subbuild/CMakeFiles/7e87c40b6d64af96d9e5f272bdc427da/catch2-populate-complete.rule"
+		},
+		{
+			"file" : "E:/GitHub/single_header/build/_deps/catch2-subbuild/CMakeFiles/ce42e9fa20623d7dd3e73bc379303809/catch2-populate-build.rule"
+		},
+		{
+			"file" : "E:/GitHub/single_header/build/_deps/catch2-subbuild/CMakeFiles/ce42e9fa20623d7dd3e73bc379303809/catch2-populate-configure.rule"
+		},
+		{
+			"file" : "E:/GitHub/single_header/build/_deps/catch2-subbuild/CMakeFiles/ce42e9fa20623d7dd3e73bc379303809/catch2-populate-download.rule"
+		},
+		{
+			"file" : "E:/GitHub/single_header/build/_deps/catch2-subbuild/CMakeFiles/ce42e9fa20623d7dd3e73bc379303809/catch2-populate-install.rule"
+		},
+		{
+			"file" : "E:/GitHub/single_header/build/_deps/catch2-subbuild/CMakeFiles/ce42e9fa20623d7dd3e73bc379303809/catch2-populate-mkdir.rule"
+		},
+		{
+			"file" : "E:/GitHub/single_header/build/_deps/catch2-subbuild/CMakeFiles/ce42e9fa20623d7dd3e73bc379303809/catch2-populate-patch.rule"
+		},
+		{
+			"file" : "E:/GitHub/single_header/build/_deps/catch2-subbuild/CMakeFiles/ce42e9fa20623d7dd3e73bc379303809/catch2-populate-test.rule"
+		},
+		{
+			"file" : "E:/GitHub/single_header/build/_deps/catch2-subbuild/CMakeFiles/ce42e9fa20623d7dd3e73bc379303809/catch2-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"catch2-populate"
+		],
+		"name" : "catch2-populate"
+	}
+}

@@ -1,0 +1,150 @@
+^E:\GITHUB\SINGLE_HEADER\BUILD\_DEPS\NLOHMANN_JSON-SUBBUILD\CMAKEFILES\008166399E1790FDBEB7F99FBA8B8011\NLOHMANN_JSON-POPULATE-MKDIR.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -Dcfgdir=/Debug -P E:/GitHub/single_header/build/_deps/nlohmann_json-subbuild/nlohmann_json-populate-prefix/tmp/nlohmann_json-populate-mkdirs.cmake
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch E:/GitHub/single_header/build/_deps/nlohmann_json-subbuild/nlohmann_json-populate-prefix/src/nlohmann_json-populate-stamp/Debug/nlohmann_json-populate-mkdir
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^E:\GITHUB\SINGLE_HEADER\BUILD\_DEPS\NLOHMANN_JSON-SUBBUILD\CMAKEFILES\008166399E1790FDBEB7F99FBA8B8011\NLOHMANN_JSON-POPULATE-DOWNLOAD.RULE
+setlocal
+cd E:\GitHub\single_header\build\_deps
+if %errorlevel% neq 0 goto :cmEnd
+E:
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE -P E:/GitHub/single_header/build/_deps/nlohmann_json-subbuild/nlohmann_json-populate-prefix/tmp/nlohmann_json-populate-gitclone.cmake
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch E:/GitHub/single_header/build/_deps/nlohmann_json-subbuild/nlohmann_json-populate-prefix/src/nlohmann_json-populate-stamp/Debug/nlohmann_json-populate-download
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^E:\GITHUB\SINGLE_HEADER\BUILD\_DEPS\NLOHMANN_JSON-SUBBUILD\CMAKEFILES\008166399E1790FDBEB7F99FBA8B8011\NLOHMANN_JSON-POPULATE-UPDATE.RULE
+setlocal
+cd E:\GitHub\single_header\build\_deps\nlohmann_json-src
+if %errorlevel% neq 0 goto :cmEnd
+E:
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -Dcan_fetch=YES -DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE -P E:/GitHub/single_header/build/_deps/nlohmann_json-subbuild/nlohmann_json-populate-prefix/tmp/nlohmann_json-populate-gitupdate.cmake
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^E:\GITHUB\SINGLE_HEADER\BUILD\_DEPS\NLOHMANN_JSON-SUBBUILD\CMAKEFILES\008166399E1790FDBEB7F99FBA8B8011\NLOHMANN_JSON-POPULATE-PATCH.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E echo_append
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch E:/GitHub/single_header/build/_deps/nlohmann_json-subbuild/nlohmann_json-populate-prefix/src/nlohmann_json-populate-stamp/Debug/nlohmann_json-populate-patch
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^E:\GITHUB\SINGLE_HEADER\BUILD\_DEPS\NLOHMANN_JSON-SUBBUILD\CMAKEFILES\008166399E1790FDBEB7F99FBA8B8011\NLOHMANN_JSON-POPULATE-CONFIGURE.RULE
+setlocal
+cd E:\GitHub\single_header\build\_deps\nlohmann_json-build
+if %errorlevel% neq 0 goto :cmEnd
+E:
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E echo_append
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch E:/GitHub/single_header/build/_deps/nlohmann_json-subbuild/nlohmann_json-populate-prefix/src/nlohmann_json-populate-stamp/Debug/nlohmann_json-populate-configure
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^E:\GITHUB\SINGLE_HEADER\BUILD\_DEPS\NLOHMANN_JSON-SUBBUILD\CMAKEFILES\008166399E1790FDBEB7F99FBA8B8011\NLOHMANN_JSON-POPULATE-BUILD.RULE
+setlocal
+cd E:\GitHub\single_header\build\_deps\nlohmann_json-build
+if %errorlevel% neq 0 goto :cmEnd
+E:
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E echo_append
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch E:/GitHub/single_header/build/_deps/nlohmann_json-subbuild/nlohmann_json-populate-prefix/src/nlohmann_json-populate-stamp/Debug/nlohmann_json-populate-build
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^E:\GITHUB\SINGLE_HEADER\BUILD\_DEPS\NLOHMANN_JSON-SUBBUILD\CMAKEFILES\008166399E1790FDBEB7F99FBA8B8011\NLOHMANN_JSON-POPULATE-INSTALL.RULE
+setlocal
+cd E:\GitHub\single_header\build\_deps\nlohmann_json-build
+if %errorlevel% neq 0 goto :cmEnd
+E:
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E echo_append
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch E:/GitHub/single_header/build/_deps/nlohmann_json-subbuild/nlohmann_json-populate-prefix/src/nlohmann_json-populate-stamp/Debug/nlohmann_json-populate-install
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^E:\GITHUB\SINGLE_HEADER\BUILD\_DEPS\NLOHMANN_JSON-SUBBUILD\CMAKEFILES\008166399E1790FDBEB7F99FBA8B8011\NLOHMANN_JSON-POPULATE-TEST.RULE
+setlocal
+cd E:\GitHub\single_header\build\_deps\nlohmann_json-build
+if %errorlevel% neq 0 goto :cmEnd
+E:
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E echo_append
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch E:/GitHub/single_header/build/_deps/nlohmann_json-subbuild/nlohmann_json-populate-prefix/src/nlohmann_json-populate-stamp/Debug/nlohmann_json-populate-test
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^E:\GITHUB\SINGLE_HEADER\BUILD\_DEPS\NLOHMANN_JSON-SUBBUILD\CMAKEFILES\4716C7FBA44B87451E846824751F31A3\NLOHMANN_JSON-POPULATE-COMPLETE.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E make_directory E:/GitHub/single_header/build/_deps/nlohmann_json-subbuild/CMakeFiles/Debug
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch E:/GitHub/single_header/build/_deps/nlohmann_json-subbuild/CMakeFiles/Debug/nlohmann_json-populate-complete
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch E:/GitHub/single_header/build/_deps/nlohmann_json-subbuild/nlohmann_json-populate-prefix/src/nlohmann_json-populate-stamp/Debug/nlohmann_json-populate-done
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^E:\GITHUB\SINGLE_HEADER\BUILD\_DEPS\NLOHMANN_JSON-SUBBUILD\CMAKEFILES\B000FC50244DBB438DEDA300A7DD4382\NLOHMANN_JSON-POPULATE.RULE
+setlocal
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^E:\GITHUB\SINGLE_HEADER\BUILD\_DEPS\NLOHMANN_JSON-SUBBUILD\CMAKELISTS.TXT
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SE:/GitHub/single_header/build/_deps/nlohmann_json-subbuild -BE:/GitHub/single_header/build/_deps/nlohmann_json-subbuild --check-stamp-file E:/GitHub/single_header/build/_deps/nlohmann_json-subbuild/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

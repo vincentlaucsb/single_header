@@ -1,0 +1,181 @@
+name: single_header
+description: Generate a single-header C++ amalgamation with the single_header CLI.
+author: single_header contributors
+
+branding:
+  icon: file-text
+  color: blue
+
+inputs:
+  version:
+    description: Release tag containing the CLI binary. Defaults to the action ref, so use a release tag such as v0.1.0.
+    required: false
+  repository:
+    description: Repository to download release assets from. Defaults to this action repository.
+    required: false
+  include-root:
+    description: One or more include roots, separated by newlines.
+    required: false
+  output:
+    description: Output header path.
+    required: false
+  config:
+    description: Optional JSON config file path. If omitted, the CLI discovers ./single_header.json when present.
+    required: false
+  source:
+    description: Extra source files, directories, or glob patterns, separated by newlines.
+    required: false
+  rewrite-macro:
+    description: Macro rewrites as NAME=VALUE entries, separated by newlines.
+    required: false
+  implementation-marker:
+    description: Marker replaced by stripped source text.
+    required: false
+    default: "/** INSERT_CSV_SOURCES **/"
+  entry:
+    description: Optional top-level header path.
+    required: false
+  run:
+    description: Set to false to install the CLI without running it.
+    required: false
+    default: "true"
+
+outputs:
+  executable:
+    description: Path to the downloaded single_header executable.
+    value: ${{ steps.install.outputs.executable }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install single_header
+      id: install
+      shell: pwsh
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_REPOSITORY: ${{ inputs.repository }}
+        ACTION_REF: ${{ github.action_ref }}
+        ACTION_REPOSITORY: ${{ github.action_repository }}
+        RUNNER_OS_NAME: ${{ runner.os }}
+        RUNNER_ARCH_NAME: ${{ runner.arch }}
+      run: |
+        $ErrorActionPreference = "Stop"
+
+        $version = $env:INPUT_VERSION
+        if (-not $version) {
+          $version = $env:ACTION_REF
+        }
+        if (-not $version) {
+          throw "No single_header release version was provided. Use this action at a release tag, or set the 'version' input."
+        }
+
+        $repository = $env:INPUT_REPOSITORY
+        if (-not $repository) {
+          $repository = $env:ACTION_REPOSITORY
+        }
+        if (-not $repository) {
+          throw "No single_header release repository was provided."
+        }
+
+        $os = $env:RUNNER_OS_NAME
+        $arch = $env:RUNNER_ARCH_NAME
+        $extension = "tar.gz"
+        $binaryName = "single_header"
+
+        if ($os -eq "Linux" -and $arch -eq "X64") {
+          $target = "linux-x86_64"
+        } elseif ($os -eq "Windows" -and $arch -eq "X64") {
+          $target = "windows-x86_64"
+          $extension = "zip"
+          $binaryName = "single_header.exe"
+        } elseif ($os -eq "macOS" -and $arch -eq "X64") {
+          $target = "macos-x86_64"
+        } elseif ($os -eq "macOS" -and $arch -eq "ARM64") {
+          $target = "macos-arm64"
+        } else {
+          throw "Unsupported runner target: $os/$arch"
+        }
+
+        $assetName = "single_header-$version-$target.$extension"
+        $downloadUrl = "https://github.com/$repository/releases/download/$version/$assetName"
+        $installDir = Join-Path $env:RUNNER_TEMP "single_header-action"
+        $archivePath = Join-Path $env:RUNNER_TEMP $assetName
+
+        Remove-Item -LiteralPath $installDir -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+
+        Invoke-WebRequest -Uri $downloadUrl -OutFile $archivePath
+
+        if ($extension -eq "zip") {
+          Expand-Archive -LiteralPath $archivePath -DestinationPath $installDir -Force
+        } else {
+          tar -xzf $archivePath -C $installDir
+        }
+
+        $binary = Get-ChildItem -LiteralPath $installDir -Recurse -File -Filter $binaryName |
+          Select-Object -First 1
+        if (-not $binary) {
+          throw "Archive did not contain $binaryName"
+        }
+
+        if ($os -ne "Windows") {
+          chmod +x $binary.FullName
+        }
+
+        "executable=$($binary.FullName)" >> $env:GITHUB_OUTPUT
+
+    - name: Run single_header
+      if: ${{ inputs.run == 'true' }}
+      shell: pwsh
+      env:
+        SINGLE_HEADER_EXECUTABLE: ${{ steps.install.outputs.executable }}
+        INPUT_CONFIG: ${{ inputs.config }}
+        INPUT_INCLUDE_ROOT: ${{ inputs.include-root }}
+        INPUT_OUTPUT: ${{ inputs.output }}
+        INPUT_SOURCE: ${{ inputs.source }}
+        INPUT_REWRITE_MACRO: ${{ inputs.rewrite-macro }}
+        INPUT_IMPLEMENTATION_MARKER: ${{ inputs.implementation-marker }}
+        INPUT_ENTRY: ${{ inputs.entry }}
+      run: |
+        $ErrorActionPreference = "Stop"
+
+        function Add-MultilineArgs {
+          param(
+            [string[]] $ArgsList,
+            [string] $Flag,
+            [string] $Values
+          )
+
+          if (-not $Values) {
+            return $ArgsList
+          }
+
+          foreach ($line in ($Values -split "\r?\n")) {
+            $value = $line.Trim()
+            if ($value) {
+              $ArgsList += @($Flag, $value)
+            }
+          }
+
+          return $ArgsList
+        }
+
+        $toolArgs = @()
+        if ($env:INPUT_CONFIG) {
+          $toolArgs += @("--config", $env:INPUT_CONFIG)
+        }
+        $toolArgs = Add-MultilineArgs $toolArgs "--include-root" $env:INPUT_INCLUDE_ROOT
+        if ($env:INPUT_OUTPUT) {
+          $toolArgs += @("--output", $env:INPUT_OUTPUT)
+        }
+        $toolArgs = Add-MultilineArgs $toolArgs "--source" $env:INPUT_SOURCE
+        $toolArgs = Add-MultilineArgs $toolArgs "--rewrite-macro" $env:INPUT_REWRITE_MACRO
+
+        if ($env:INPUT_IMPLEMENTATION_MARKER) {
+          $toolArgs += @("--implementation-marker", $env:INPUT_IMPLEMENTATION_MARKER)
+        }
+        if ($env:INPUT_ENTRY) {
+          $toolArgs += @("--entry", $env:INPUT_ENTRY)
+        }
+
+        & $env:SINGLE_HEADER_EXECUTABLE @toolArgs

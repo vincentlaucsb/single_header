@@ -1,0 +1,10 @@
+^E:\GITHUB\SINGLE_HEADER\BUILD\_DEPS\CATCH2-SUBBUILD\CMAKEFILES\A31DB7E0830B4C2794CD6E0BEE9C3106\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SE:/GitHub/single_header/build/_deps/catch2-subbuild -BE:/GitHub/single_header/build/_deps/catch2-subbuild --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file E:/GitHub/single_header/build/_deps/catch2-subbuild/catch2-populate.slnx
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

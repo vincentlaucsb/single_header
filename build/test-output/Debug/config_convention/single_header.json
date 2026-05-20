@@ -1,0 +1,4 @@
+{
+  "includeRoots": ["../../../../tests/fixtures/simple/include"],
+  "output": "generated/simple.hpp"
+}
