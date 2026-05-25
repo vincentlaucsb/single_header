@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">single_header badge</title>
+  <desc id="desc">A dark square badge with cyan and green code lines merging into one header file marked .hpp.</desc>
+  <rect width="512" height="512" rx="84" fill="#071217"/>
+
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M72 172 H144 C172 172 184 204 211 204" stroke="#29E6C8" stroke-width="10"/>
+    <path d="M72 222 H154 C178 222 190 236 211 236" stroke="#75F07C" stroke-width="10"/>
+    <path d="M72 290 H154 C178 290 190 276 211 276" stroke="#29E6C8" stroke-width="10"/>
+    <path d="M72 340 H144 C172 340 184 308 211 308" stroke="#75F07C" stroke-width="10"/>
+    <path d="M211 256 H276" stroke="#F4FBFF" stroke-width="18"/>
+  </g>
+
+  <g>
+    <path d="M292 126 H390 L438 174 V386 H292 Z" fill="#10202A" stroke="#F4FBFF" stroke-width="12" stroke-linejoin="round"/>
+    <path d="M390 126 V176 H438" fill="none" stroke="#F4FBFF" stroke-width="12" stroke-linejoin="round"/>
+    <path d="M318 228 H412" stroke="#29E6C8" stroke-width="12" stroke-linecap="round"/>
+    <path d="M318 274 H412" stroke="#75F07C" stroke-width="12" stroke-linecap="round"/>
+    <text x="365" y="346"
+          fill="#F4FBFF"
+          font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace"
+          font-size="48"
+          font-weight="700"
+          text-anchor="middle">.hpp</text>
+  </g>
+</svg>

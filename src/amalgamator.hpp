@@ -1,3 +1,7 @@
+// single_header 0.1.0
+// Copyright (c) 2026 Vincent La
+// SPDX-License-Identifier: MIT
+
 #pragma once
 
 #include <filesystem>
