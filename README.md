@@ -19,6 +19,8 @@ The repository also includes a composite GitHub Action that downloads a released
 - Rewrites selected `#define NAME` directives with CLI or JSON config values.
 - Splices stripped source text into a configurable implementation marker, or
   appends source text when no marker is found.
+- Optionally moves supported function/method definitions into their declarations
+  with a Clang 20 semantic backend; default generation remains unchanged.
 
 ## Building
 
@@ -43,6 +45,10 @@ ctest --test-dir build --build-config Release --output-on-failure
 CMake fetches `nlohmann/json` when it is not available from the system package
 manager. Tests also fetch Catch2 when needed.
 
+Compiler-backed stitching is an opt-in build requiring LLVM/Clang 20 development
+packages. See [function stitching](docs/function-stitching.md) for build commands,
+compilation contexts, supported C++, validation guarantees, and limitations.
+
 ## CLI Usage
 
 ```sh
@@ -64,6 +70,11 @@ Common options:
 --implementation-marker <text> Marker replaced by stripped source text.
 --entry <path>                 Optional top-level header; limits output to reachable
                                scanned headers.
+--function-stitching <mode>    off (default), free, methods, or all; requires Clang build.
+--compilation-database <path>  compile_commands.json or its directory.
+--frontend-arg <argument>      Complete frontend arguments instead of a database; repeatable.
+--stitching-report <path>      Optional versioned JSON analysis report.
+--inline-annotation <name>     Opt in an empty/inline annotation macro; repeatable.
 --help                         Show help.
 ```
 

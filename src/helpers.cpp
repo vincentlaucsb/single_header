@@ -104,6 +104,10 @@ void write_text(const fs::path &path, const std::string &text) {
     throw std::runtime_error("failed to write " + path.string());
   }
   output << text;
+  output.flush();
+  if (!output) {
+    throw std::runtime_error("failed to write " + path.string());
+  }
 }
 
 bool contains_wildcard(const std::string &value) {

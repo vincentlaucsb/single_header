@@ -36,7 +36,8 @@ std::string config_relative_pattern(const fs::path &config_dir, const std::strin
 
 void reject_unknown_config_keys(const json &document, const fs::path &path) {
   static const std::set<std::string> known_keys = {
-    "includeRoots", "output", "sources", "rewriteMacros", "implementationMarker", "entry"};
+    "includeRoots", "output", "sources", "rewriteMacros", "implementationMarker", "entry",
+    "functionStitching", "compilationDatabase", "frontendArgs", "stitchingReport", "inlineAnnotations"};
 
   for (auto it = document.begin(); it != document.end(); ++it) {
     if (!known_keys.count(it.key())) {
@@ -96,6 +97,7 @@ Options read_config(const fs::path &config_path) {
   reject_unknown_config_keys(document, config_path);
 
   Options options;
+  options.config_file = config_path;
   const fs::path config_dir = config_path.parent_path().empty()
                                 ? fs::current_path()
                                 : config_path.parent_path();
@@ -119,6 +121,19 @@ Options read_config(const fs::path &config_path) {
   if (document.contains("entry")) {
     options.entry = config_relative_path(config_dir, read_json_string(document, "entry", config_path));
   }
+  if (document.contains("functionStitching")) {
+    options.function_stitching = read_json_string(document, "functionStitching", config_path);
+  }
+  if (document.contains("compilationDatabase")) {
+    options.compilation_database = config_relative_path(config_dir,
+        read_json_string(document, "compilationDatabase", config_path));
+  }
+  if (document.contains("stitchingReport")) {
+    options.stitching_report = config_relative_path(config_dir,
+        read_json_string(document, "stitchingReport", config_path));
+  }
+  options.frontend_args = read_json_string_array(document, "frontendArgs", config_path);
+  options.inline_annotations = read_json_string_array(document, "inlineAnnotations", config_path);
 
   if (document.contains("rewriteMacros")) {
     const auto &rewrites = document.at("rewriteMacros");

@@ -1,121 +1,4 @@
-#include <catch2/catch_test_macros.hpp>
-
-#include <cstdlib>
-#include <filesystem>
-#include <fstream>
-#include <sstream>
-#include <stdexcept>
-#include <string>
-#include <vector>
-
-namespace fs = std::filesystem;
-
-namespace {
-
-fs::path tool_path() { return SINGLE_HEADER_TEST_TOOL; }
-fs::path fixture_dir() { return SINGLE_HEADER_TEST_FIXTURES; }
-fs::path output_dir() { return SINGLE_HEADER_TEST_OUTPUT_DIR; }
-fs::path cmake_command() { return SINGLE_HEADER_TEST_CMAKE_COMMAND; }
-std::string cmake_generator() { return SINGLE_HEADER_TEST_CMAKE_GENERATOR; }
-
-std::string quote(const fs::path &path) {
-  auto value = path.string();
-  std::string quoted = "\"";
-  for (char ch : value) {
-    if (ch == '"') {
-      quoted += "\\\"";
-    } else {
-      quoted += ch;
-    }
-  }
-  quoted += "\"";
-  return quoted;
-}
-
-std::string quote_value(const std::string &value) {
-  std::string quoted = "\"";
-  for (char ch : value) {
-    if (ch == '"') {
-      quoted += "\\\"";
-    } else {
-      quoted += ch;
-    }
-  }
-  quoted += "\"";
-  return quoted;
-}
-
-std::string json_string(const fs::path &path) {
-  return quote_value(path.generic_string());
-}
-
-std::string json_string_value(const std::string &value) {
-  return quote_value(value);
-}
-
-void write_text(const fs::path &path, const std::string &text);
-
-void run_command(const std::string &command) {
-  INFO(command);
-  static int command_index = 0;
-  const auto script_dir = output_dir() / "scripts";
-  fs::create_directories(script_dir);
-
-#ifdef _WIN32
-  const auto script = script_dir / ("command_" + std::to_string(command_index++) + ".cmd");
-  write_text(script, "@echo off\n" + command + "\n");
-  REQUIRE(std::system(("cmd /S /C " + quote(script)).c_str()) == 0);
-#else
-  const auto script = script_dir / ("command_" + std::to_string(command_index++) + ".sh");
-  write_text(script, "#!/usr/bin/env sh\nset -e\n" + command + "\n");
-  REQUIRE(std::system(("sh " + quote(script)).c_str()) == 0);
-#endif
-}
-
-void run_command_in_dir(const fs::path &working_dir, const std::string &command) {
-#ifdef _WIN32
-  run_command("cd /D " + quote(working_dir) + " && " + command);
-#else
-  run_command("cd " + quote(working_dir) + " && " + command);
-#endif
-}
-
-std::string read_text(const fs::path &path) {
-  std::ifstream input(path, std::ios::binary);
-  if (!input) {
-    throw std::runtime_error("failed to read " + path.string());
-  }
-  std::ostringstream buffer;
-  buffer << input.rdbuf();
-  return buffer.str();
-}
-
-void write_text(const fs::path &path, const std::string &text) {
-  fs::create_directories(path.parent_path());
-  std::ofstream output(path, std::ios::binary);
-  if (!output) {
-    throw std::runtime_error("failed to write " + path.string());
-  }
-  output << text;
-}
-
-void expect_golden(const std::string &fixture_name, const std::string &extra_args = {}) {
-  const auto fixture = fixture_dir() / fixture_name;
-  const auto output = output_dir() / (fixture_name + ".hpp");
-  fs::create_directories(output.parent_path());
-
-  auto command = quote(tool_path()) +
-                 " --include-root " + quote(fixture / "include") +
-                 " --output " + quote(output);
-  if (!extra_args.empty()) {
-    command += " " + extra_args;
-  }
-
-  run_command(command);
-  CHECK(read_text(output) == read_text(fixture / "expected.hpp"));
-}
-
-} // namespace
+#include "test_support.hpp"
 
 TEST_CASE("generates golden output for a small fake library", "[golden]") {
   expect_golden("simple");
@@ -225,4 +108,28 @@ TEST_CASE("explicit CLI flags override JSON config values", "[config]") {
 
   CHECK_FALSE(fs::exists(config_output));
   CHECK(read_text(override_output) == read_text(fixture / "expected.hpp"));
+}
+
+TEST_CASE("explicit off overrides configured stitching and preserves legacy output", "[stitching][config]") {
+  const auto work = output_dir() / "off_override";
+  const auto fixture = fixture_dir() / "simple";
+  const auto config = work / "config.json";
+  write_text(config, nlohmann::json{{"includeRoots", { (fixture / "include").generic_string() }},
+      {"output", (work / "result.hpp").generic_string()}, {"functionStitching", "all"}}.dump());
+  run_command(quote(tool_path()) + " --config " + quote(config) + " --function-stitching off");
+  CHECK(read_text(work / "result.hpp") == read_text(fixture / "expected.hpp"));
+}
+
+TEST_CASE("stitching rejects invalid modes and unavailable compilation contexts", "[stitching][errors]") {
+  const auto args = quote(tool_path()) + " --include-root " + quote(fixture_dir() / "simple/include") +
+      " --output " + quote(output_dir() / "errors.hpp");
+  auto invalid = run_result(args + " --function-stitching automatic");
+  CHECK(invalid.status != 0); CHECK(invalid.error.find("expects off, free, methods, or all") != std::string::npos);
+  auto unavailable = run_result(args + " --function-stitching all");
+  CHECK(unavailable.status != 0);
+#ifdef SINGLE_HEADER_TEST_WITH_CLANG
+  CHECK(unavailable.error.find("requires exactly one") != std::string::npos);
+#else
+  CHECK(unavailable.error.find("SINGLE_HEADER_WITH_CLANG=ON") != std::string::npos);
+#endif
 }

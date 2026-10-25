@@ -5,6 +5,8 @@ project(single_header
   DESCRIPTION "Small C++ single-header amalgamation tool"
   LANGUAGES CXX)
 
+option(SINGLE_HEADER_WITH_CLANG "Enable conservative compiler-backed function stitching" OFF)
+
 include(FetchContent)
 
 find_package(nlohmann_json 3 CONFIG QUIET)
@@ -21,9 +23,29 @@ add_executable(single_header
   src/cli.cpp
   src/config.cpp
   src/helpers.cpp
+  src/stitching.cpp
   src/main.cpp)
 target_compile_features(single_header PRIVATE cxx_std_17)
 target_link_libraries(single_header PRIVATE nlohmann_json::nlohmann_json)
+
+if(SINGLE_HEADER_WITH_CLANG)
+  enable_language(C)
+  find_package(LLVM REQUIRED CONFIG)
+  find_package(Clang REQUIRED CONFIG)
+  if(NOT LLVM_VERSION_MAJOR EQUAL 20)
+    message(FATAL_ERROR "Function stitching is pinned to LLVM/Clang 20")
+  endif()
+  target_sources(single_header PRIVATE src/stitching_clang.cpp)
+  target_include_directories(single_header SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS} ${CLANG_INCLUDE_DIRS})
+  target_compile_definitions(single_header PRIVATE SINGLE_HEADER_WITH_CLANG=1)
+  target_compile_definitions(single_header PRIVATE SINGLE_HEADER_CLANG_BINARY="${LLVM_TOOLS_BINARY_DIR}/clang++${CMAKE_EXECUTABLE_SUFFIX}")
+  target_link_libraries(single_header PRIVATE clangTooling clangFrontend clangAST clangIndex clangLex)
+  if(MSVC)
+    target_link_options(single_header PRIVATE /STACK:33554432)
+    # Clang's heavily instantiated visitor emits spurious C4702 under MSVC.
+    set_source_files_properties(src/stitching_clang.cpp PROPERTIES COMPILE_OPTIONS /wd4702)
+  endif()
+endif()
 
 if(MSVC)
   target_compile_options(single_header PRIVATE /W4 /permissive-)
@@ -52,6 +74,11 @@ if(BUILD_TESTING)
   add_executable(single_header_tests tests/test_cli.cpp)
   target_compile_features(single_header_tests PRIVATE cxx_std_17)
   target_link_libraries(single_header_tests PRIVATE Catch2::Catch2WithMain)
+  target_link_libraries(single_header_tests PRIVATE nlohmann_json::nlohmann_json)
+  if(SINGLE_HEADER_WITH_CLANG)
+    target_sources(single_header_tests PRIVATE tests/test_stitching.cpp)
+    target_compile_definitions(single_header_tests PRIVATE SINGLE_HEADER_TEST_WITH_CLANG=1)
+  endif()
   target_compile_definitions(single_header_tests PRIVATE
     SINGLE_HEADER_TEST_TOOL="$<TARGET_FILE:single_header>"
     SINGLE_HEADER_TEST_FIXTURES="${TEST_FIXTURE_DIR}"

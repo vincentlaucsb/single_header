@@ -18,6 +18,12 @@ struct Options {
   std::string implementation_marker = "/** INSERT_CSV_SOURCES **/";
   std::filesystem::path output;
   std::filesystem::path entry;
+  std::string function_stitching = "off";
+  std::filesystem::path compilation_database;
+  std::vector<std::string> frontend_args;
+  std::filesystem::path stitching_report;
+  std::vector<std::string> inline_annotations;
+  std::filesystem::path config_file;
   bool show_help = false;
 };
 
