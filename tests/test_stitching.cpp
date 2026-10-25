@@ -679,6 +679,22 @@ TEST_CASE("all original provenance is collected before generated baselines",
   CHECK(data.at("counts").at("removedBodies") == 1);
 }
 
+TEST_CASE("residual deduced closure return types retain declaration identity",
+          "[stitching][baseline][origins]") {
+  StitchFixture fixture("closure_return_type");
+  fixture.files("#pragma once\nint safe();\n"
+                "inline auto factory() { return []() { return 1; }; }\n",
+                "int safe() { return 7; }\n");
+  const auto data = fixture.generate();
+  CHECK(data.at("baseline") == "valid");
+  CHECK(fixture.reason(data, "safe") == "accepted");
+  CHECK(data.at("counts").at("removedBodies") == 1);
+  const auto text = read_text(fixture.output);
+  CHECK(text.find("inline int safe() { return 7; }") != std::string::npos);
+  CHECK(text.find("inline auto factory() { return []() { return 1; }; }") !=
+        std::string::npos);
+}
+
 TEST_CASE(
     "moving preprocessing state cannot activate untouched header branches",
     "[stitching][preprocessor]") {

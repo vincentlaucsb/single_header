@@ -767,7 +767,10 @@ struct Collector : RecursiveASTVisitor<Collector> {
       if (method->getParent()->isLambda())
         return true; // Included in the enclosing body's record.
     const auto key = id(fn);
-    result.declarations["type:" + key] = type_name(fn->getType(), ctx);
+    Semantics signature(ctx, &env.identities);
+    signature.initialize(fn);
+    result.declarations["type:" + key] =
+        signature.normalized(type_name(fn->getType(), ctx));
     std::string attributes;
     llvm::raw_string_ostream attribute_output(attributes);
     for (const auto *attribute : fn->attrs())

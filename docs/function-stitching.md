@@ -132,6 +132,8 @@ as relocation candidates.
 Residual closure types and their embedded template-argument USRs use the enclosing
 function identity plus lexical closure ordinal, retaining selected-specialization
 comparison when inline distribution changes Clang's closure-linkage spelling.
+The same normalization applies to declaration types, including deduced return
+types containing a closure, without dropping the canonical type comparison.
 Function-template specialization identities contain the selected primary template
 and structured canonical arguments; this avoids context-sensitive USR compression
 without discarding overload or argument identity. Anonymous enum types use their
