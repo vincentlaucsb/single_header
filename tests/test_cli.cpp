@@ -257,7 +257,10 @@ TEST_CASE("namespace merging JSON and CLI overrides preserve macro-boundary runt
       "namespace api { namespace detail { namespace leaf { inline int second() { return first() + 4; } } } }\n"
       "#define SPLIT int marker; } namespace other { int\n"
       "namespace original { SPLIT moved = 5; } namespace original { inline int answer() { return 7; } }\n"
-      "#undef SPLIT\n";
+      "#undef SPLIT\n"
+      "namespace CSV { enum Kind { CSV_BOOL = 4 }; template<class T> struct Box { T value; };\n"
+      "#if FEATURE\ninline int chosen() { return 5; }\n#else\ninline int chosen() { return 3; }\n#endif\n}\n"
+      "namespace CSV {\n#pragma region functions\ninline int result() { Box<int> box{CSV_BOOL}; return chosen() + box.value; }\n#pragma endregion\n}\n";
   write_text(include / "api.hpp", input);
   const auto config = work / "settings.json";
   nlohmann::json settings = {{"includeRoots", {include.generic_string()}}, {"output", output.generic_string()}};
@@ -272,6 +275,7 @@ TEST_CASE("namespace merging JSON and CLI overrides preserve macro-boundary runt
   const auto merged = read_text(output);
   CHECK(merged.find("namespace api", merged.find("namespace api") + 1) == std::string::npos);
   CHECK(merged.find("namespace original { SPLIT moved = 5; } namespace original {") != std::string::npos);
+  CHECK(merged.find("namespace CSV", merged.find("namespace CSV") + 1) == std::string::npos);
   run_command(command + " --no-merge-namespaces");
   CHECK(read_text(output) == unmerged);
   settings["mergeNamespaces"] = false;
@@ -287,11 +291,15 @@ TEST_CASE("namespace merging JSON and CLI overrides preserve macro-boundary runt
 
   const auto project = work / "consumer";
   write_text(project / "main.cpp", "#include \"generated.hpp\"\n"
-      "int main() { return api::detail::leaf::second() == 7 && other::moved == 5 && original::answer() == 7 ? 0 : 1; }\n");
+      "int main() { return api::detail::leaf::second() == 7 && other::moved == 5 && original::answer() == 7 && CSV::result() == (FEATURE ? 9 : 7) ? 0 : 1; }\n");
   write_text(project / "CMakeLists.txt", "cmake_minimum_required(VERSION 3.20)\nproject(namespace_consumer LANGUAGES CXX)\n"
       "add_executable(consumer main.cpp)\ntarget_compile_features(consumer PRIVATE cxx_std_17)\n"
       "target_include_directories(consumer PRIVATE \"" + work.generic_string() + "\")\n"
-      "enable_testing()\nadd_test(NAME runtime COMMAND consumer)\n");
+      "target_compile_definitions(consumer PRIVATE FEATURE=0)\n"
+      "add_executable(consumer_feature main.cpp)\ntarget_compile_features(consumer_feature PRIVATE cxx_std_17)\n"
+      "target_include_directories(consumer_feature PRIVATE \"" + work.generic_string() + "\")\n"
+      "target_compile_definitions(consumer_feature PRIVATE FEATURE=1)\n"
+      "enable_testing()\nadd_test(NAME runtime COMMAND consumer)\nadd_test(NAME feature_runtime COMMAND consumer_feature)\n");
   run_command(quote(cmake_command()) + " -S " + quote(project) + " -B " + quote(work / "build") +
       " -DCMAKE_BUILD_TYPE=Release -G " + quote_value(cmake_generator()));
   run_command(quote(cmake_command()) + " --build " + quote(work / "build") + " --config Release");

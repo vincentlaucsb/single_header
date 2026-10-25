@@ -42,6 +42,8 @@ std::string stitch_functions(const Options &options,
   };
   llvm::sys::PrintStackTraceOnErrorSignal("single_header");
   Environment env;
+  env.inline_functions = options.inline_functions;
+  env.require_cpp17 = options.function_stitching != "off";
   env.annotations.insert(options.inline_annotations.begin(),
                          options.inline_annotations.end());
   for (const auto &header : headers)
@@ -82,16 +84,20 @@ std::string stitch_functions(const Options &options,
       throw std::runtime_error("cannot load compilation database: " + error);
   }
   std::vector<tooling::CompileCommand> commands;
-  for (const auto &source : sources) {
+  auto context_files = sources;
+  if (context_files.empty() && options.inline_functions)
+    context_files = headers;
+  for (const auto &source : context_files) {
     if (database) {
       auto matches = database->getCompileCommands(source.string());
-      if (matches.size() != 1)
+      if (matches.empty() || (!options.inline_functions && matches.size() != 1))
         throw std::runtime_error("expected exactly one compile command for " +
                                  source.string() + "; found " +
                                  std::to_string(matches.size()));
-      auto command = std::move(matches.front());
-      command.Filename = normalize_path(source).string();
-      commands.push_back(std::move(command));
+      for (auto &command : matches) {
+        command.Filename = normalize_path(source).string();
+        commands.push_back(std::move(command));
+      }
     } else {
       std::vector<std::string> arguments{SINGLE_HEADER_CLANG_BINARY};
       arguments.insert(arguments.end(), options.frontend_args.begin(),
@@ -104,6 +110,7 @@ std::string stitch_functions(const Options &options,
   json report = {{"version", 1},
                  {"backend", "clang-20"},
                  {"mode", options.function_stitching},
+                 {"inlineFunctions", options.inline_functions},
                  {"configurations", json::array()},
                  {"candidates", json::array()},
                  {"baseline", "valid"}};
@@ -111,7 +118,8 @@ std::string stitch_functions(const Options &options,
   std::set<std::string> baseline_difference_keys;
   std::vector<ParseResult> originals, baselines;
   std::map<std::string, Candidate> candidates;
-  const auto legacy = render({});
+  // Run collation audits before any compiler work, including in inline mode.
+  std::string legacy = render({});
   std::string baseline_problem, baseline_diagnostics;
   bool pragma = false;
   for (const auto &[path, facts] : env.lexical) {
@@ -141,6 +149,15 @@ std::string stitch_functions(const Options &options,
     if (original.errors)
       throw std::runtime_error("original analysis failed for " +
                                command.Filename + ":\n" + original.diagnostics);
+    if (!original.inline_problem.empty())
+      throw std::runtime_error(original.inline_problem);
+    for (const auto &edit : original.inline_edits) {
+      const auto duplicate = std::find_if(env.inline_edits.begin(), env.inline_edits.end(),
+          [&](const Edit &existing) { return existing.where.file == edit.where.file &&
+              existing.where.begin == edit.where.begin; });
+      if (duplicate == env.inline_edits.end())
+        env.inline_edits.push_back(edit);
+    }
     for (auto &candidate : original.candidates) {
       auto [found, inserted] = candidates.emplace(candidate.id, candidate);
       if (!inserted && (found->second.file != candidate.file ||
@@ -154,6 +171,85 @@ std::string stitch_functions(const Options &options,
   // identities. A later TU may introduce an internal declaration absent from an
   // earlier TU, but present in the artifact seen by every context.
   env.identities.frozen = true;
+  if (options.inline_functions) {
+    std::map<std::string, std::set<unsigned>> observed;
+    std::map<std::string, std::vector<Span>> ranges;
+    std::map<std::string, std::vector<Span>> definitions;
+    for (const auto &original : originals) {
+      for (const auto &[file, offsets] : original.observed_tokens)
+        observed[file].insert(offsets.begin(), offsets.end());
+      for (const auto &range : original.observed_ranges)
+        ranges[range.file].push_back(range);
+      for (const auto &range : original.definition_ranges) {
+        ranges[range.file].push_back(range);
+        definitions[range.file].push_back(range);
+      }
+    }
+    for (const auto &original : originals) {
+      for (const auto &macro : original.observed_ranges) {
+        if (!env.sources.count(macro.file))
+          continue;
+        bool inside_function = false;
+        for (const auto &definition : definitions[macro.file])
+          if (definition.begin <= macro.begin && macro.end <= definition.end) {
+            inside_function = true;
+            break;
+          }
+        if (!inside_function) {
+          const auto &text = env.input.at(macro.file);
+          const auto line = 1 + std::count(text.begin(), text.begin() + macro.begin, '\n');
+          throw std::runtime_error("--inline-functions cannot verify a source macro outside an "
+              "observed function definition at " + macro.file + ':' +
+              std::to_string(line) + "; declaration-producing macros require ordinary "
+              "physical function definitions");
+        }
+      }
+    }
+    for (auto &[file, spans] : ranges) {
+      (void)file;
+      std::sort(spans.begin(), spans.end(), [](const Span &a, const Span &b) {
+        return a.begin < b.begin;
+      });
+      std::vector<Span> merged;
+      for (const auto &range : spans) {
+        if (!merged.empty() && range.begin <= merged.back().end)
+          merged.back().end = std::max(merged.back().end, range.end);
+        else
+          merged.push_back(range);
+      }
+      spans = std::move(merged);
+    }
+    // Every potentially emitted source declaration must be seen in a supplied context.
+    // Whole observed bodies cover their inactive alternatives: adding inline to
+    // the enclosing signature already protects those alternatives as well.
+    for (const auto &[file, facts] : env.lexical) {
+      if (!env.sources.count(file))
+        continue;
+      const auto &spans = ranges[file];
+      std::size_t directive = 0, range = 0;
+      for (const auto &token : facts.tokens) {
+        while (directive < facts.directives.size() && facts.directives[directive].end <= token.offset)
+          ++directive;
+        if (directive < facts.directives.size() && facts.directives[directive].begin <= token.offset)
+          continue;
+        while (range < spans.size() && spans[range].end <= token.offset)
+          ++range;
+        if ((range < spans.size() && spans[range].begin <= token.offset) ||
+            observed[file].count(token.offset))
+          continue;
+        const auto &text = env.input.at(file);
+        const auto line = 1 + std::count(text.begin(), text.begin() + token.offset, '\n');
+        throw std::runtime_error("--inline-functions has unobserved C++ tokens at " + file + ':' +
+            std::to_string(line) + "; supply compilation contexts covering every emitted declaration "
+            "(including conditional source branches)");
+      }
+    }
+  }
+  SourceOverrides inline_overrides;
+  if (!apply_edits(env, {}, inline_overrides))
+    throw std::runtime_error("function inline insertion conflicts; no output was written");
+  if (options.inline_functions)
+    legacy = render(inline_overrides);
   finish_phase("discovery");
   std::cerr << "single_header: stitching recording generated baselines\n";
   for (unsigned i = 0; i < commands.size(); ++i) {
@@ -200,6 +296,9 @@ std::string stitch_functions(const Options &options,
   }
   finish_phase("baseline");
   if (!baseline_problem.empty()) {
+    if (options.inline_functions)
+      throw std::runtime_error("inline function artifact validation failed; no output was written:\n" +
+                               baseline_diagnostics);
     report["baseline"] = "invalid";
     report["baselineReason"] = baseline_problem;
     report["baselineDiagnostics"] = baseline_diagnostics;
@@ -221,8 +320,10 @@ std::string stitch_functions(const Options &options,
   for (auto &[key, candidate] : candidates) {
     if (candidate.matched)
       ++matched;
-    if (candidate.reason.empty() && options.function_stitching != "all" &&
-        candidate.method != (options.function_stitching == "methods"))
+    if (candidate.reason.empty() &&
+        (options.function_stitching == "off" ||
+         (options.function_stitching != "all" &&
+          candidate.method != (options.function_stitching == "methods"))))
       candidate.reason = "mode_excluded";
     if (candidate.reason.empty() && pragma)
       candidate.reason = "unsupported_pragma_state";
@@ -374,7 +475,7 @@ std::string stitch_functions(const Options &options,
               << '\n';
   }
   // Check the exact final accepted batch once more, including residual bodies.
-  if (!accepted.empty()) {
+  if (!accepted.empty() || options.inline_functions) {
     std::cerr << "single_header: stitching freshly validating final artifact\n";
     for (unsigned i = 0; i < commands.size(); ++i) {
       const auto final_result = parse(commands[i], env, &output);
@@ -400,13 +501,14 @@ std::string stitch_functions(const Options &options,
                       {"removedBodies", accepted.size()},
                       {"removedLines", removed_lines},
                       {"alreadyInline", already_inline},
+                      {"inlineInsertions", env.inline_edits.size()},
                       {"skipped", candidates.size() - accepted.size()}};
   report["work"] = {
       {"originalParses", commands.size()}, {"baselineParses", commands.size()},
       {"trialParses", trial_parses}, {"trialAttempts", trial_attempts},
       {"trialCacheHits", cache_hits},
       {"guidedPartitions", guided_partitions},
-      {"finalParses", accepted.empty() ? 0 : commands.size()},
+      {"finalParses", accepted.empty() && !options.inline_functions ? 0 : commands.size()},
       {"lexedFiles", env.lexical.size()},
       {"typeCacheHits", type_hits}, {"typeCacheEntries", type_entries}};
   report["phaseMilliseconds"] = phases;

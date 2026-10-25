@@ -28,6 +28,9 @@ struct Expansion {
   std::string name;
   bool annotation;
   bool body_safe = false;
+  bool function_like = false;
+  bool complete = false;
+  std::vector<Span> arguments;
 };
 struct Record {
   std::string semantics, tokens, unsupported;
@@ -50,6 +53,11 @@ struct ParseResult {
   std::map<std::string, Record> bodies;
   std::map<std::string, std::string> declarations;
   std::vector<Candidate> candidates;
+  std::vector<Edit> inline_edits;
+  std::vector<Span> definition_ranges;
+  std::map<std::string, std::set<unsigned>> observed_tokens;
+  std::vector<Span> observed_ranges;
+  std::string inline_problem;
   bool errors = false;
   bool artifact_seen = false;
   bool source_state = false;
@@ -73,6 +81,8 @@ struct FileFacts {
   bool whole_file_guard = false;
 };
 struct Environment {
+  bool inline_functions = false, require_cpp17 = true;
+  std::vector<Edit> inline_edits;
   std::set<std::string> headers, sources;
   std::map<std::string, std::string> input;
   std::map<std::string, FileFacts> lexical;

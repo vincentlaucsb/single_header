@@ -51,3 +51,16 @@ try { & ([scriptblock]::Create($script)) } catch {
   $rejected = $true
 }
 if (-not $rejected) { throw "Invalid namespace action boolean was accepted" }
+
+$env:INPUT_MERGE_NAMESPACES = ""
+$env:INPUT_INLINE_FUNCTIONS = "true"
+Check-Forwarding "" "" @("--config", "configured.json", "--inline-functions")
+$env:INPUT_INLINE_FUNCTIONS = "false"
+Check-Forwarding "" "" @("--config", "configured.json", "--no-inline-functions")
+$env:INPUT_INLINE_FUNCTIONS = "invalid"
+$rejected = $false
+try { & ([scriptblock]::Create($script)) } catch {
+  if ($_.Exception.Message -notlike '*inline-functions expects true or false*') { throw }
+  $rejected = $true
+}
+if (-not $rejected) { throw "Invalid inline action boolean was accepted" }

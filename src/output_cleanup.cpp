@@ -15,13 +15,14 @@ namespace single_header {
 using namespace output_detail;
 namespace {
 struct DocMode { std::string literal; char fence = 0; std::size_t fence_length = 0; bool uncertain = false; };
+struct CleanupEdit { std::size_t begin, end; bool separator = false; };
 bool license_word(std::string word) {
   std::transform(word.begin(), word.end(), word.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
   return word.find("copyright") == 0 || word == "license" || word == "licensed" ||
          word == "(c)" || word.find("spdx") == 0;
 }
 void clean_documentation(std::string_view source, std::size_t begin, std::size_t end,
-                         bool block, DocMode &mode, std::vector<Range> &edits) {
+                         bool block, DocMode &mode, std::vector<CleanupEdit> &edits) {
   const auto text = source.substr(begin, end - begin);
   if (mode.uncertain) return;
   if (text.find("\\\n") != std::string_view::npos || text.find("\\\r\n") != std::string_view::npos) {
@@ -30,6 +31,7 @@ void clean_documentation(std::string_view source, std::size_t begin, std::size_t
   }
   const auto content_begin = begin + 3;
   const auto content_end = block ? end - 2 : end;
+  const auto first_edit = edits.size();
   for (auto line = content_begin; line < content_end;) {
     const auto newline = source.find('\n', line);
     const auto stop = std::min(content_end, newline == std::string_view::npos ? content_end : newline);
@@ -81,6 +83,23 @@ void clean_documentation(std::string_view source, std::size_t begin, std::size_t
       }
     }
     line = stop == content_end ? content_end : stop + 1;
+  }
+  if (block && edits.size() != first_edit) {
+    // A real file directive documents the entire comment, not just its filename.
+    // Keep legal notices even when they share that comment with file metadata.
+    bool legal_notice = false;
+    for (std::size_t i = 0; i < text.size();) {
+      if (!std::isalnum(static_cast<unsigned char>(text[i])) && text[i] != '(') { ++i; continue; }
+      const auto start = i++;
+      while (i < text.size() && !std::isspace(static_cast<unsigned char>(text[i]))) ++i;
+      legal_notice = legal_notice || license_word(std::string(text.substr(start, i - start)));
+    }
+    if (!legal_notice) {
+      edits.resize(first_edit);
+      // Comments separate preprocessing tokens: int/** @file */value must not
+      // become intvalue, and +/** @file */+ must not become ++.
+      edits.push_back({begin, end, true});
+    }
   }
 }
 
@@ -208,8 +227,15 @@ std::string hoist_includes(std::string_view source, std::string_view guard,
   std::string block;
   const auto newline = source.find("\r\n") == std::string_view::npos ? "\n" : "\r\n";
   for (std::size_t i = 0; i < items.size(); ++i)
-    if (eligible[i] && !items[i].header.empty() && included.insert(items[i].header).second)
-      block += "#include " + items[i].header + newline;
+    if (eligible[i] && !items[i].header.empty()) included.insert(items[i].header);
+  // Sort by header path, with the full literal as a deterministic delimiter tie-break.
+  std::vector<std::string> ordered(included.begin(), included.end());
+  std::sort(ordered.begin(), ordered.end(), [](const auto &a, const auto &b) {
+    const auto path_a = std::string_view(a).substr(1, a.size() - 2);
+    const auto path_b = std::string_view(b).substr(1, b.size() - 2);
+    return path_a == path_b ? a < b : path_a < path_b;
+  });
+  for (const auto &header : ordered) block += "#include " + header + newline;
   if (block.empty()) return std::string(source);
   const auto insertion = items[definition].end;
   if (insertion && source[insertion - 1] != '\n') block.insert(0, newline);
@@ -249,7 +275,8 @@ std::string hoist_includes(std::string_view source, std::string_view guard,
 static std::string clean_pass(std::string_view source, bool metadata, bool blanks) {
   const LogicalSource view(source);
   const auto &text = view.text;
-  std::vector<Range> edits, protected_ranges;
+  std::vector<CleanupEdit> edits;
+  std::vector<Range> protected_ranges;
   bool line_start = true;
   DocMode line_doc;
   std::size_t previous_doc_end = std::string_view::npos;
@@ -346,13 +373,20 @@ static std::string clean_pass(std::string_view source, bool metadata, bool blank
     } else previous_blank = false;
     line = end;
   }
-  std::sort(edits.begin(), edits.end(), [](Range a, Range b) { return a.begin < b.begin; });
+  std::sort(edits.begin(), edits.end(), [](CleanupEdit a, CleanupEdit b) { return a.begin < b.begin; });
   std::string output;
   output.reserve(source.size());
   std::size_t cursor = 0;
   for (const auto edit : edits) {
     if (edit.begin < cursor) continue;
     output.append(source.substr(cursor, edit.begin - cursor));
+    if (edit.separator) {
+      output += ' ';
+      // Keep a physical line boundary so a following #directive cannot join
+      // preceding code. The leading space also prevents accidental splicing.
+      if (source.substr(edit.begin, edit.end - edit.begin).find('\n') != std::string_view::npos)
+        output += '\n';
+    }
     cursor = edit.end;
   }
   output.append(source.substr(cursor));

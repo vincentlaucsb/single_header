@@ -27,8 +27,9 @@ The repository also includes a composite GitHub Action that downloads a released
 - Optionally moves supported function/method definitions into their declarations
   with a Clang 20 semantic backend; the default build remains lightweight.
 - Automatically collapses repeated ordinary blank lines and removes Doxygen
-  `@file`/`\file` metadata. Literal contents, comments, continued directives,
-  licenses, and Doxygen code/verbatim/fenced examples are preserved.
+  `@file`/`\file` documentation blocks, including their descriptions. License-bearing
+  blocks retain their text with only the directive/filename removed. Ordinary
+  comments, literal examples, and continued directives are preserved.
 
 Cleanup applies to both ordinary generation and stitching. Include deduplication
 is **off by default**, so unresolved include directives retain their repetitions.
@@ -52,7 +53,7 @@ An unrelated waiver never hides another header's conflict. Deduplication off ski
 the audit.
 
 The pass gathers all literal `<...>` and `"..."` includes with no
-conditional guard except the configured outer guard, in first-seen order, and
+conditional guard except the configured outer guard, in alphabetical header-path order, and
 places them immediately after that guard's opening `#define`. Ordinary code,
 namespaces, and unrelated macro definitions do not stop the pass. Angle and
 quoted names are separate identities. Repeats after the new block are removed,
@@ -78,9 +79,10 @@ an enabled configuration. Only adjacent ordinary named namespace blocks separate
 by whitespace/comments are candidates. Merging outer blocks can expose inner
 blocks, which are processed recursively without a fixed nesting limit.
 
-Preprocessor boundaries and known structural macros prevent merging. Compact
-`namespace a::b` syntax, inline/anonymous/attributed namespaces, and ambiguous
-macro-shaped declarations are left unchanged. The lightweight pass cannot know
+Conditional namespace boundaries and known structural macro expansions prevent
+merging. Compact `namespace a::b` syntax and inline/anonymous/attributed namespaces
+remain unchanged. Internal conditionals, uppercase identifiers, and nonstructural
+macros do not prevent merging. The lightweight pass cannot know
 arbitrary macro definitions supplied only by external headers or compiler flags;
 use it when those macros do not hide namespace boundaries. It is an optional
 structural cleanup, not a general C++ equivalence proof. Compiler-backed stitching
@@ -89,6 +91,12 @@ See [namespace cleanup](docs/namespace-merging.md) for supported forms, macro
 preconditions, and the cached structural algorithm.
 
 ## Building
+
+The optional [`--inline-functions` mode](docs/inline-functions.md) lets the
+Clang-enabled generator supply `inline` for ordinary external definitions,
+including definitions left unstitched. It works with stitching off and accepts
+C++11 contexts in that mode. Conditional source declarations must be covered by
+the supplied compiler contexts. Lightweight binaries reject this option clearly.
 
 Requirements:
 
@@ -143,6 +151,8 @@ Common options:
 --merge-namespaces            Merge supported adjacent namespaces recursively; default off.
 --no-merge-namespaces         Disable namespace merging, overriding JSON config.
 --function-stitching <mode>    off (default), free, methods, or all; requires Clang build.
+--inline-functions            Add inline to external function definitions; requires Clang.
+--no-inline-functions         Disable automatic inlining, overriding JSON config.
 --compilation-database <path>  compile_commands.json or its directory.
 --frontend-arg <argument>      Complete frontend arguments instead of a database; repeatable.
 --stitching-report <path>      Optional versioned JSON analysis report.
@@ -167,6 +177,7 @@ default. You can also pass a config explicitly with `--config`.
   "implementationMarker": "MYLIB_IMPLEMENTATION_MARKER",
   "entry": "include/mylib/api.hpp",
   "deduplicateIncludes": false,
+  "inlineFunctions": false,
   "includeGuard": "MYLIB_HPP",
   "allowMixedIncludes": []
 }
@@ -186,7 +197,7 @@ Shell quoting must preserve those delimiters: POSIX shells and PowerShell accept
 Use this repository as a composite action from a release tag:
 
 ```yaml
-- uses: owner/single_header@v1.0.0
+- uses: owner/single_header@1.1.0
   with:
     include-root: include
     output: dist/library.hpp
@@ -201,6 +212,13 @@ replaces configured waivers when supplied. It does not exclude headers from
 hoisting. The action also
 exposes the installed executable as the `executable` output. Set `run: "false"`
 to install the tool without immediately running it.
+
+For compiler-backed generation, supply `executable: path/to/single_header` to use
+a locally built Clang-enabled binary instead of downloading the lightweight one.
+The Action forwards `inline-functions`, `function-stitching`,
+`compilation-database`, `frontend-arg`, `stitching-report`, and `inline-annotation`
+to that executable. See [automatic inlining](docs/inline-functions.md) for the
+source-coverage and multi-configuration contract.
 
 ## Development
 

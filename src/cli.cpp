@@ -28,6 +28,7 @@ struct CliOptions {
   bool frontend_args_set = false;
   bool report_set = false;
   bool annotations_set = false;
+  bool inline_functions_set = false;
   bool deduplicate_includes_set = false;
   bool merge_namespaces_set = false;
   bool include_guard_set = false;
@@ -93,6 +94,9 @@ CliOptions parse_cli_args(int argc, char **argv) {
     } else if (arg == "--function-stitching") {
       cli.options.function_stitching = require_value(&i, arg);
       cli.stitching_set = true;
+    } else if (arg == "--inline-functions" || arg == "--no-inline-functions") {
+      cli.options.inline_functions = arg == "--inline-functions";
+      cli.inline_functions_set = true;
     } else if (arg == "--compilation-database") {
       cli.options.compilation_database = require_value(&i, arg);
       cli.database_set = true;
@@ -158,7 +162,11 @@ Options:
                                 Opt-in; review external structural macros before enabling.
   --no-merge-namespaces         Disable namespace merging, overriding JSON configuration.
   --function-stitching <mode>    off (default), free, methods, or all. Requires Clang build.
+  --inline-functions            Add inline to ordinary external function definitions.
+                                Default off; requires Clang and complete frontend contexts.
+  --no-inline-functions         Disable function inlining, overriding JSON configuration.
   --compilation-database <path>  compile_commands.json or its directory; one command per source.
+                                With --inline-functions, multiple commands cover source branches.
   --frontend-arg <argument>      Complete Clang frontend arguments instead of a database.
                                 Repeat for each argument (including -std and include paths).
   --stitching-report <path>      Optional versioned JSON analysis report (never stdout).
@@ -214,6 +222,7 @@ Options parse_args(int argc, char **argv) {
   if (cli.frontend_args_set) options.frontend_args = cli.options.frontend_args;
   if (cli.report_set) options.stitching_report = cli.options.stitching_report;
   if (cli.annotations_set) options.inline_annotations = cli.options.inline_annotations;
+  if (cli.inline_functions_set) options.inline_functions = cli.options.inline_functions;
   if (cli.deduplicate_includes_set) options.deduplicate_includes = cli.options.deduplicate_includes;
   if (cli.merge_namespaces_set) options.merge_namespaces = cli.options.merge_namespaces;
   if (cli.include_guard_set) options.include_guard = cli.options.include_guard;

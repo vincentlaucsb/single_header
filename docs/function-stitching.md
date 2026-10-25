@@ -4,12 +4,17 @@ The optional LLVM/Clang 20 backend moves supported source definitions to existin
 header declarations. `--function-stitching off|free|methods|all` defaults to `off`.
 The default build and release binaries retain the lightweight generator; requesting
 stitching from those binaries fails with build instructions. Explicit `off`
-overrides JSON configuration and follows the original generation path.
+overrides JSON configuration. It follows the lightweight generation path unless
+[automatic function inlining](inline-functions.md) is separately enabled.
 
 Both generation paths automatically collapse repeated ordinary blank lines and
-remove Doxygen file directives' command/optional filename. Literal/comment
-payloads, continued directives, licenses, and Doxygen code/verbatim/fenced
-examples remain protected.
+remove whole Doxygen block comments containing a real `@file` or `\file`
+directive, including their descriptions. License-bearing blocks retain their
+text with only the directive/optional filename removed; line-style directives
+also retain the surrounding documentation. Commands inside code/verbatim/fenced
+examples or ordinary prose do not identify a file block. Ordinary comments,
+literal payloads, continued directives, and uncertain spliced comments remain
+protected. Removed comments leave whitespace to preserve token separation.
 
 Include hoisting and deduplication is a separate option, off by default. Set
 `--deduplicate-includes --include-guard MYLIB_HPP` (JSON `deduplicateIncludes: true`
@@ -24,7 +29,7 @@ string array, Action multiline `allow-mixed-include`) suppress only that audit
 identity: they never exclude a header from hoisting. CLI waivers replace the JSON
 list; delimiter spelling distinguishes angle from quoted operands. With the audit
 satisfied, the pass gathers every unguarded literal angle/quoted include, treating only that outer
-guard as transparent, and emits a first-seen-order block immediately after its
+guard as transparent, and emits a alphabetically sorted header-path block immediately after its
 opening `#define`. Code, namespaces, and unrelated macros do not limit the scan.
 It removes later occurrences of those same literal includes, even in conditional
 branches; distinct conditional-only includes and macro-expanded operands stay in
@@ -146,9 +151,24 @@ Signature macros are skipped. To explicitly allow an object macro whose expansio
 is empty or exactly `inline`, use `--inline-annotation CSV_INLINE` (repeatable).
 Its full source spelling is removed with the definition, including an empty prefix
 that is absent from the AST range. Rewrites for configured annotations must also
-be empty or `inline`. Simple object body macros are supported when expanded-token
-and semantic records remain equal. Function-like body macros, pragma-producing
-macros and macro-generated declarations remain deferred.
+be empty or `inline`. Object body macros and bounded function-like body macros
+are supported when expanded-token and semantic records remain equal. A function-like
+invocation must have a complete physical spelling range wholly inside the literal
+opening and closing braces of the function's `CompoundStmt`. Its unexpanded argument
+ranges and nested expansions must also remain inside that invocation/body in every
+original, baseline, trial and final context. Signature/constructor-initializer macros,
+macro-generated function braces or whole-function declarations, unresolvable/cross-boundary ranges,
+pragma-producing macros, and stringification/token-pasting macros remain deferred.
+
+The original invocation spelling moves intact, including arguments that an empty
+macro erases from the AST. For example, a variadic catch wrapper can retain its named
+exception declaration and full handler even in a context that defines the wrapper to
+nothing. `return`, `break`, and `throw` inside contained arguments are ordinary control
+flow; their expanded AST structure, binding and enclosing targets still participate
+in semantic validation. The generator does not pre-expand or rewrite the invocation.
+Macro definitions must already be available at the destination; changed replacements,
+lookup or pragma effects reject relocation. A shared interval index checks complete
+invocation overlap and containment without rescanning source files per candidate.
 
 Deferred candidates include templates and class-template methods, constructor
 function-try-blocks, defaulted/deleted definitions, global allocation/deallocation
@@ -217,14 +237,17 @@ cannot veto relocation. If the unstitched artifact fails parsing, the report mar
 `baseline` as `invalid`, records its compiler diagnostics and
 `destination_parse_error` reason, and blocks relocation with `baseline_invalid`.
 The unchanged legacy output does not carry a semantic safety claim. A successful
-delta check covers the supplied configurations only. Multiple commands
-for a source are deliberately rejected; validate separate builds/configurations
-explicitly. Consumer macros, different compiler semantics, unmodeled extensions,
+delta check covers the supplied configurations only. Stitching without automatic
+inlining deliberately rejects multiple commands for a source. With
+[`--inline-functions`](inline-functions.md), multiple commands provide the
+configurations required to cover conditional source declarations, and each is
+validated. Consumer macros, different compiler semantics, unmodeled extensions,
 and uninstantiated templates are not universally proven.
 
 Diagnostics go to stderr. The optional version-1 JSON report records contexts,
 locations, accepted/skipped reasons and compiler diagnostics, matching and removal
-counts, functions already inline, elapsed analysis time, retained implementation
+counts, functions already inline, unique automatic `inlineInsertions` before
+stitching, elapsed analysis time, retained implementation
 state, and `bytes` (`unstitched`, `stitched`, signed `savings`). Original-to-unstitched
 diagnostics are deduplicated by reason and bounded to ten records. The report must
 be outside scanned roots and distinct from inputs, config,
@@ -286,7 +309,7 @@ backend and 0.31 MB without it; the enabled build used separate PDB debug
 information. These are local build measurements, not published
 package sizes or startup/memory guarantees.
 
-### Latest csv-parser check
+### Historical csv-parser comparison
 
 The locally checked upstream revision was
 `e623089b34e6842fca909d1d0af04ef1b93f423d` (October 25, 2026). Its C++ sources and
@@ -317,7 +340,7 @@ headers after the configured guard. `<algorithm>`, `<vector>` and `<string>` eac
 appeared once. Analysis took 64,707 ms (64,791 ms external wall time), with the
 same 37 frontend parses and skip reasons. Timings vary between local runs.
 
-The current strict audit intentionally rejects that upstream revision before
+The strict audit intentionally rejects that upstream revision before
 Clang discovery or output writing: 22 headers have both guarded and unguarded
 occurrences. In particular, `data_frame_executor.hpp` includes `<thread>` without
 the `CSV_ENABLE_THREADS` guard used by the scheduler and task pool. This is tracked
@@ -335,13 +358,17 @@ compiler-disabled-exception smoke tests on the preserved hoisted artifact. Its
 matching unstitched control passed the same four runtime groups. The remaining
 skips retain their source implementations and explicit reasons in the report.
 
-The optional namespace pass was then measured on that preserved 670,773-byte
-artifact. It removed three nested adjacent namespace boundaries, yielding
-670,690 bytes (83 additional bytes saved) in 80 ms external wall time. A no-merge
-control was byte-identical to the input. Both MSVC and Clang consumers passed
-the same four runtime groups on the namespace-cleaned output. This isolated
-postprocessing measurement does not rerun stitching or bypass the current
-mixed-include audit on the original sources.
+The final cleanup was measured on that preserved artifact after restoring its
+27 original file-documentation comments from the archived pre-cleanup header.
+The old generator reproduced the 670,773-byte artifact byte-for-byte from this
+input, establishing a matching comparison. Complete file-block removal saves
+2,994 bytes, producing 667,779 bytes without namespace merging. Merging removes
+71 namespace boundaries (175 named blocks become 104; `csv` blocks fall from
+60 to 19), saving another 1,649 bytes. The final alphabetically hoisted header is
+666,130 bytes: 4,560 bytes smaller than the preceding 670,690-byte preview.
+Cleanup took 124 ms external wall time. Both MSVC and Clang consumers passed the
+same four runtime groups. This isolated postprocessing measurement does not
+rerun stitching or bypass the mixed-include audit on the original sources.
 
 The original-to-unstitched report identifies a preexisting collation difference:
 the `CSV_NON_NULL(2)`

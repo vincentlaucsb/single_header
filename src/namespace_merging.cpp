@@ -72,32 +72,10 @@ std::vector<Token> tokens(const LogicalSource &view, std::string_view source,
   return result;
 }
 
-bool keyword(std::string_view word) {
-  static const std::set<std::string_view> words = {
-    "alignas", "alignof", "asm", "auto", "bool", "break", "case", "catch", "char", "char8_t", "char16_t", "char32_t",
-    "class", "const", "consteval", "constexpr", "constinit", "const_cast", "continue", "decltype", "default", "delete",
-    "do", "double", "dynamic_cast", "else", "enum", "explicit", "export", "extern", "false", "float", "for", "friend",
-    "goto", "if", "inline", "int", "long", "mutable", "new", "noexcept", "nullptr", "operator", "private", "protected",
-    "public", "register", "reinterpret_cast", "requires", "return", "short", "signed", "sizeof", "static", "static_assert",
-    "static_cast", "struct", "switch", "template", "this", "thread_local", "throw", "true", "try", "typedef", "typeid",
-    "typename", "union", "unsigned", "using", "virtual", "void", "volatile", "wchar_t", "while", "and", "and_eq", "bitand",
-    "bitor", "compl", "not", "not_eq", "or", "or_eq", "xor", "xor_eq"};
-  return words.count(word) != 0;
-}
-bool macro_style(std::string_view word) {
-  bool upper = false;
-  for (const unsigned char c : word) {
-    if (std::islower(c)) return false;
-    upper = upper || std::isupper(c);
-  }
-  return upper;
-}
-
-// Every definition participates, including conditional definitions and later
-// redefinitions. Function macros, token pasting, braces, namespace tokens, and
-// aliases whose full expansion is not known harmless are treated as barriers.
+// Track actual structural tokens and their locally defined macro dependencies.
 std::set<std::string> risky_macros(const std::vector<Directive> &items,
-                                   std::set<std::string> &defined) {
+                                   std::set<std::string> &defined,
+                                   std::set<std::string> &function_macros) {
   struct Definition { bool risky = false; std::set<std::string> references; };
   std::map<std::string, Definition> definitions;
   for (const auto &item : items) {
@@ -108,33 +86,50 @@ std::set<std::string> risky_macros(const std::vector<Directive> &items,
     const auto name = item.argument.substr(0, end);
     defined.insert(name);
     auto &definition = definitions[name];
-    if (end < item.argument.size() && item.argument[end] == '(') definition.risky = true;
+    std::set<std::string> parameters;
+    if (end < item.argument.size() && item.argument[end] == '(') {
+      function_macros.insert(name);
+      const auto close = item.argument.find(')', end);
+      if (close == std::string::npos) { definition.risky = true; continue; }
+      for (auto p = end + 1; p < close;) {
+        if (!identifier(item.argument[p])) { ++p; continue; }
+        const auto first = p++;
+        while (p < close && identifier(item.argument[p])) ++p;
+        parameters.insert(item.argument.substr(first, p - first));
+      }
+      parameters.insert("__VA_ARGS__");
+      end = close + 1;
+    }
     const auto replacement = std::string_view(item.argument).substr(end);
     const LogicalSource view(replacement);
-    for (const auto &token : tokens(view, replacement, {})) {
-      if (token.opens() || token.closes() || token.is("namespace") || token.is("#") || token.is("%"))
+    const auto replacement_tokens = tokens(view, replacement, {});
+    for (std::size_t t = 0; t < replacement_tokens.size(); ++t) {
+      const auto &token = replacement_tokens[t];
+      const bool paste = (token.is("#") && t + 1 < replacement_tokens.size() && replacement_tokens[t + 1].is("#")) ||
+          (token.is("%") && t + 3 < replacement_tokens.size() && replacement_tokens[t + 1].is(":") &&
+           replacement_tokens[t + 2].is("%") && replacement_tokens[t + 3].is(":"));
+      if (token.opens() || token.closes() || token.is("namespace") || paste)
         definition.risky = true;
-      if (token.kind == Kind::word) definition.references.emplace(token.value);
+      if (token.kind == Kind::word && !parameters.count(std::string(token.value))) definition.references.emplace(token.value);
     }
   }
-  // Solve harmlessness rather than danger: cycles and unknown external aliases
-  // never acquire a proof that they cannot inject structural tokens.
-  std::set<std::string> harmless;
+  std::set<std::string> result;
+  for (const auto &[name, definition] : definitions) if (definition.risky) result.insert(name);
   bool changed = true;
   while (changed) {
     changed = false;
     for (const auto &[name, definition] : definitions) {
-      if (definition.risky || harmless.count(name)) continue;
-      if (std::all_of(definition.references.begin(), definition.references.end(),
-                      [&](const auto &reference) {
-                        return (keyword(reference) && !defined.count(reference)) || harmless.count(reference) != 0;
-                      })) {
-        harmless.insert(name); changed = true;
+      if (!function_macros.count(name) && std::any_of(definition.references.begin(), definition.references.end(),
+          [&](const auto &reference) { return function_macros.count(reference) != 0; })) {
+        function_macros.insert(name); changed = true;
+      }
+      if (result.count(name)) continue;
+      if (std::any_of(definition.references.begin(), definition.references.end(),
+                      [&](const auto &reference) { return result.count(reference) != 0; })) {
+        result.insert(name); changed = true;
       }
     }
   }
-  std::set<std::string> result;
-  for (const auto &name : defined) if (!harmless.count(name)) result.insert(name);
   return result;
 }
 
@@ -149,24 +144,44 @@ std::string merge_pass(std::string_view source) {
   const LogicalSource view(source);
   const auto directives_found = directives(source);
   const auto code = tokens(view, source, directives_found);
-  std::set<std::string> defined;
-  const auto risky = risky_macros(directives_found, defined);
+  std::set<std::string> defined, function_macros;
+  const auto risky = risky_macros(directives_found, defined, function_macros);
   // Removing a namespace keyword would also remove its macro expansion.
   if (defined.count("namespace")) return std::string(source);
   std::vector<Namespace> nodes;
   std::vector<std::size_t> closing_node(code.size(), absent);
   std::vector<Frame> stack(1);
+  std::vector<std::vector<std::size_t>> conditional_namespaces;
+  auto namespaces = [&] {
+    std::vector<std::size_t> result;
+    for (const auto &frame : stack) if (frame.node != absent) result.push_back(frame.node);
+    return result;
+  };
   auto invalidate = [&] {
     for (const auto &frame : stack) if (frame.node != absent) nodes[frame.node].safe = false;
   };
   for (std::size_t i = 0; i < code.size(); ++i) {
     const auto &token = code[i];
-    if (token.kind == Kind::directive) { invalidate(); stack.back().declaration_start = true; continue; }
+    if (token.kind == Kind::directive) {
+      const auto found = std::lower_bound(directives_found.begin(), directives_found.end(), token.bytes.begin,
+          [](const Directive &directive, std::size_t begin) { return directive.begin < begin; });
+      if (found == directives_found.end() || found->begin != token.bytes.begin) return std::string(source);
+      const auto &word = found->word;
+      if (word == "if" || word == "ifdef" || word == "ifndef") conditional_namespaces.push_back(namespaces());
+      else if (word == "elif" || word == "elifdef" || word == "elifndef" || word == "else" || word == "endif") {
+        // Every branch must leave the namespace scopes it entered. Conditional
+        // function/control-flow braces do not change namespace identity.
+        if (conditional_namespaces.empty() || conditional_namespaces.back() != namespaces()) return std::string(source);
+        if (word == "endif") conditional_namespaces.pop_back();
+      } else if (word == "include" || word == "include_next" || word == "import") invalidate();
+      stack.back().declaration_start = true;
+      continue;
+    }
     const bool namespace_scope = stack.size() == 1 || stack.back().node != absent;
     if (namespace_scope && stack.back().declaration_start && token.is("namespace") && i + 2 < code.size() &&
         code[i + 1].kind == Kind::word && code[i + 2].is("{")) {
       const auto name = code[i + 1].value;
-      const bool safe = !defined.count(std::string(name)) && !macro_style(name);
+      const bool safe = !defined.count(std::string(name));
       if (!safe) invalidate();
       nodes.push_back({i, i + 2, absent, stack.back().node, name, safe});
       stack.back().declaration_start = false;
@@ -176,15 +191,20 @@ std::string merge_pass(std::string_view source) {
     }
     if (token.kind == Kind::word) {
       const auto name = std::string(token.value);
-      const bool ordinary_word = !keyword(token.value) && !token.is("namespace");
-      const bool external_style = ordinary_word && !defined.count(name) && macro_style(token.value);
-      const bool standalone = ordinary_word && namespace_scope && stack.back().declaration_start && i + 1 < code.size() &&
-          (code[i + 1].is("(") || code[i + 1].is(";") || code[i + 1].closes() || code[i + 1].is("namespace"));
-      if (risky.count(name) || external_style || (standalone && !defined.count(name))) invalidate();
+      if (risky.count(name)) invalidate();
+      if (function_macros.count(name) && i + 1 < code.size() && code[i + 1].is("(")) {
+        // Parameters can duplicate or reorder structural argument tokens.
+        std::size_t depth = 0;
+        for (auto argument = i + 1; argument < code.size(); ++argument) {
+          if (code[argument].opens() || code[argument].closes() || code[argument].is("namespace")) invalidate();
+          if (code[argument].is("(")) ++depth;
+          else if (code[argument].is(")") && --depth == 0) break;
+        }
+      }
     }
     if (token.opens()) {
       stack.back().declaration_start = false;
-      stack.push_back({});
+      stack.push_back({absent, true});
     } else if (token.closes()) {
       if (stack.size() == 1) return std::string(source);
       if (stack.back().node != absent) {
@@ -196,7 +216,7 @@ std::string merge_pass(std::string_view source) {
     } else if (token.is(";")) stack.back().declaration_start = true;
     else stack.back().declaration_start = false;
   }
-  if (stack.size() != 1) return std::string(source);
+  if (stack.size() != 1 || !conditional_namespaces.empty()) return std::string(source);
   // A linked token stream and namespace representatives retain the one scan's
   // facts. Each merge exposes at most one new child boundary to the work queue.
   // No whole-file re-lex/reparse is needed, even for deeply nested chains.

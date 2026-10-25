@@ -361,7 +361,7 @@ std::string generate(const Options &options) {
                           options.deduplicate_includes, options.include_guard,
                           options.allow_mixed_includes, options.merge_namespaces);
   };
-  if (options.function_stitching != "off") {
+  if (options.function_stitching != "off" || options.inline_functions) {
     return stitch_functions(options, files.headers, files.sources, render);
   }
   return render({});

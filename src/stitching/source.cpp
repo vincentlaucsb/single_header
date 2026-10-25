@@ -172,6 +172,16 @@ bool apply_edits(const Environment &env,
         candidate->declaration);
     by_file[candidate->definition.where.file].push_back(candidate->definition);
   }
+  for (const auto &edit : env.inline_edits) {
+    bool replaced = false;
+    for (const auto *candidate : candidates)
+      for (const auto *range : {&candidate->declaration.where, &candidate->definition.where})
+        if (range->file == edit.where.file && range->begin <= edit.where.begin &&
+            edit.where.begin < range->end)
+          replaced = true;
+    if (!replaced)
+      by_file[edit.where.file].push_back(edit);
+  }
   for (auto &[file, edits] : by_file) {
     auto text = env.input.at(file);
     std::sort(edits.begin(), edits.end(), [](const Edit &a, const Edit &b) {
@@ -179,7 +189,8 @@ bool apply_edits(const Environment &env,
     });
     unsigned boundary = static_cast<unsigned>(text.size());
     for (const auto &edit : edits) {
-      if (!edit.where.valid() || edit.where.end > boundary)
+      if (edit.where.file.empty() || edit.where.begin > edit.where.end ||
+          edit.where.end > boundary)
         return false;
       text.replace(edit.where.begin, edit.where.end - edit.where.begin,
                    edit.replacement);

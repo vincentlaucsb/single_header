@@ -11,7 +11,7 @@ inputs:
     description: Optional existing CLI executable (for a locally built Clang backend). Skips download.
     required: false
   version:
-    description: Release tag containing the CLI binary. Defaults to the action ref, so use a release tag such as v1.0.0.
+    description: Release tag containing the CLI binary. Defaults to the action ref, so use a release tag such as 1.1.0.
     required: false
   repository:
     description: Repository to download release assets from. Defaults to this action repository.
@@ -51,6 +51,9 @@ inputs:
     required: false
   function-stitching:
     description: Optional off, free, methods, or all. Requires a Clang-enabled executable for stitching.
+    required: false
+  inline-functions:
+    description: Optional true or false; add inline to ordinary external function definitions. Requires Clang and complete compilation contexts. Omit to use JSON/default off.
     required: false
   compilation-database:
     description: Optional compile_commands.json path or directory.
@@ -177,6 +180,7 @@ runs:
         INPUT_ALLOW_MIXED_INCLUDE: ${{ inputs.allow-mixed-include }}
         INPUT_MERGE_NAMESPACES: ${{ inputs.merge-namespaces }}
         INPUT_FUNCTION_STITCHING: ${{ inputs.function-stitching }}
+        INPUT_INLINE_FUNCTIONS: ${{ inputs.inline-functions }}
         INPUT_COMPILATION_DATABASE: ${{ inputs.compilation-database }}
         INPUT_FRONTEND_ARG: ${{ inputs.frontend-arg }}
         INPUT_STITCHING_REPORT: ${{ inputs.stitching-report }}
@@ -242,6 +246,13 @@ runs:
         }
         if ($env:INPUT_FUNCTION_STITCHING) {
           $toolArgs += @("--function-stitching", $env:INPUT_FUNCTION_STITCHING)
+        }
+        if ($env:INPUT_INLINE_FUNCTIONS) {
+          switch ($env:INPUT_INLINE_FUNCTIONS) {
+            "true" { $toolArgs += "--inline-functions" }
+            "false" { $toolArgs += "--no-inline-functions" }
+            default { throw "inline-functions expects true or false" }
+          }
         }
         if ($env:INPUT_COMPILATION_DATABASE) {
           $toolArgs += @("--compilation-database", $env:INPUT_COMPILATION_DATABASE)
