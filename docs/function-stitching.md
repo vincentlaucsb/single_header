@@ -7,9 +7,13 @@ stitching from those binaries fails with build instructions. Explicit `off`
 overrides JSON configuration and follows the original generation path.
 
 Both generation paths automatically collapse repeated ordinary blank lines and
-remove Doxygen file directives' command/optional filename. Literal/comment
-payloads, continued directives, licenses, and Doxygen code/verbatim/fenced
-examples remain protected.
+remove whole Doxygen block comments containing a real `@file` or `\file`
+directive, including their descriptions. License-bearing blocks retain their
+text with only the directive/optional filename removed; line-style directives
+also retain the surrounding documentation. Commands inside code/verbatim/fenced
+examples or ordinary prose do not identify a file block. Ordinary comments,
+literal payloads, continued directives, and uncertain spliced comments remain
+protected. Removed comments leave whitespace to preserve token separation.
 
 Include hoisting and deduplication is a separate option, off by default. Set
 `--deduplicate-includes --include-guard MYLIB_HPP` (JSON `deduplicateIncludes: true`
@@ -24,7 +28,7 @@ string array, Action multiline `allow-mixed-include`) suppress only that audit
 identity: they never exclude a header from hoisting. CLI waivers replace the JSON
 list; delimiter spelling distinguishes angle from quoted operands. With the audit
 satisfied, the pass gathers every unguarded literal angle/quoted include, treating only that outer
-guard as transparent, and emits a first-seen-order block immediately after its
+guard as transparent, and emits a alphabetically sorted header-path block immediately after its
 opening `#define`. Code, namespaces, and unrelated macros do not limit the scan.
 It removes later occurrences of those same literal includes, even in conditional
 branches; distinct conditional-only includes and macro-expanded operands stay in
@@ -335,13 +339,17 @@ compiler-disabled-exception smoke tests on the preserved hoisted artifact. Its
 matching unstitched control passed the same four runtime groups. The remaining
 skips retain their source implementations and explicit reasons in the report.
 
-The optional namespace pass was then measured on that preserved 670,773-byte
-artifact. It removed three nested adjacent namespace boundaries, yielding
-670,690 bytes (83 additional bytes saved) in 80 ms external wall time. A no-merge
-control was byte-identical to the input. Both MSVC and Clang consumers passed
-the same four runtime groups on the namespace-cleaned output. This isolated
-postprocessing measurement does not rerun stitching or bypass the current
-mixed-include audit on the original sources.
+The final cleanup was measured on that preserved artifact after restoring its
+27 original file-documentation comments from the archived pre-cleanup header.
+The old generator reproduced the 670,773-byte artifact byte-for-byte from this
+input, establishing a matching comparison. Complete file-block removal saves
+2,994 bytes, producing 667,779 bytes without namespace merging. Merging removes
+71 namespace boundaries (175 named blocks become 104; `csv` blocks fall from
+60 to 19), saving another 1,649 bytes. The final alphabetically hoisted header is
+666,130 bytes: 4,560 bytes smaller than the preceding 670,690-byte preview.
+Cleanup took 124 ms external wall time. Both MSVC and Clang consumers passed the
+same four runtime groups. This isolated postprocessing measurement does not
+rerun stitching or bypass the mixed-include audit on the original sources.
 
 The original-to-unstitched report identifies a preexisting collation difference:
 the `CSV_NON_NULL(2)`

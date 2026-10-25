@@ -42,7 +42,7 @@ TEST_CASE("cleanup preserves spliced comments and continued preprocessing lines"
         "#define NUMBER 1'000\nint a;\n\nint b;\n");
 }
 
-TEST_CASE("cleanup removes only Doxygen file directives and preserves other comment text", "[cleanup]") {
+TEST_CASE("cleanup removes file documentation blocks but preserves legal notices and ordinary comments", "[cleanup]") {
   const std::string source = R"fixture(/** @file api.hpp
  * @brief API documentation.
  * Copyright 2026 Example.
@@ -61,7 +61,8 @@ const char *text = "@file string.hpp";
   const auto output = cleanup_output(source);
   CHECK(output.find("@file api.hpp") == std::string::npos);
   CHECK(output.find("\\file \"path with spaces/api.hpp\"") == std::string::npos);
-  CHECK(output.find("int/**  */value;") != std::string::npos);
+  CHECK(output.find("int value;") != std::string::npos);
+  CHECK(output.find("Other documentation.") == std::string::npos);
   CHECK(output.find("@brief API documentation.") != std::string::npos);
   CHECK(output.find("Copyright 2026 Example.") != std::string::npos);
   CHECK(output.find("See @file in ordinary prose.") != std::string::npos);
@@ -85,7 +86,9 @@ TEST_CASE("cleanup preserves Doxygen code verbatim and Markdown fenced blocks", 
  * ~~~
  * @file keep_other_fence.hpp
  * ````
- * @file remove.hpp
+ */
+/** @file remove.hpp
+ * File description to remove.
  */
 /// @code
 /// @file keep_line.hpp
@@ -100,10 +103,29 @@ TEST_CASE("cleanup preserves Doxygen code verbatim and Markdown fenced blocks", 
   CHECK(output.find("@file keep_line.hpp") != std::string::npos);
   CHECK(output.find("@file remove.hpp") == std::string::npos);
   CHECK(output.find("@file remove_line.hpp") == std::string::npos);
+  CHECK(output.find("File description to remove.") == std::string::npos);
   const std::string uncertain = "/// @co\\\nde\n/// @file retain.hpp\n/// @endcode\n/// @file retain_too.hpp\n\n/// @file remove.hpp\n";
   CHECK(cleanup_output(uncertain).find("@file retain.hpp") != std::string::npos);
   CHECK(cleanup_output(uncertain).find("@file retain_too.hpp") != std::string::npos);
   CHECK(cleanup_output(uncertain).find("@file remove.hpp") == std::string::npos);
+}
+
+TEST_CASE("file block removal precedes namespace merging and preserves token boundaries", "[cleanup][namespaces]") {
+  const std::string comment = "/** @file\n *  Defines an object used to store CSV format settings\n */";
+  const std::string source = "namespace csv { int first; }\n" + comment +
+      "\nnamespace csv { int second; }\n";
+  const auto output = cleanup_output(source, false, {}, {}, true);
+  CHECK(output.find("Defines an object") == std::string::npos);
+  CHECK(output.find("/**") == std::string::npos);
+  CHECK(output.find("namespace csv", output.find("namespace csv") + 1) == std::string::npos);
+  CHECK(cleanup_output(output, false, {}, {}, true) == output);
+  CHECK(cleanup_output("int/** @file */value; +/*! \\file */+;\n") == "int value; + +;\n");
+  CHECK(cleanup_output("int value;/** @file\n */#define FLAG 1\n") == "int value; \n#define FLAG 1\n");
+  CHECK(cleanup_output("/*! \\file api.hpp\r\n * File description.\r\n */\r\nint value;\r\n").find("File description") == std::string::npos);
+  CHECK(cleanup_output("/** @brief See @file in prose. */") == "/** @brief See @file in prose. */");
+  const std::string example = "/** @code\n * @file example.hpp\n * @endcode\n */";
+  CHECK(cleanup_output(example) == example);
+  CHECK(cleanup_output("/** @file api.hpp\n * SPDX-License-Identifier: MIT\n */").find("SPDX-License-Identifier: MIT") != std::string::npos);
 }
 
 TEST_CASE("include deduplication defaults off and retains adjacent and distant repeats", "[cleanup][includes]") {
@@ -112,7 +134,7 @@ TEST_CASE("include deduplication defaults off and retains adjacent and distant r
   CHECK(cleanup_output(source) == source);
 }
 
-TEST_CASE("optional include pass hoists file-wide literals in first-seen order", "[cleanup][includes]") {
+TEST_CASE("optional include pass hoists file-wide literals in alphabetical order", "[cleanup][includes]") {
   const std::string source = R"fixture(#ifndef LIBRARY_GUARD
 #define LIBRARY_GUARD
 #include <algorithm>
@@ -143,8 +165,8 @@ struct Scope {
   CHECK(output == R"fixture(#ifndef LIBRARY_GUARD
 #define LIBRARY_GUARD
 #include <algorithm>
-#include <vector>
 #include <string>
+#include <vector>
 int first;
 #define MODE 1
 #if FEATURE
@@ -171,7 +193,7 @@ TEST_CASE("include identities retain delimiter kind and macro operands", "[clean
       "#include <cassert>\n#include <cassert>\n#include vector\n#endif\n";
   const auto output = cleanup_output(source, true, "SECOND_GUARD");
   CHECK(output == "#if ! defined (SECOND_GUARD)\n#define SECOND_GUARD 1\n"
-      "#include <vector>\n#include \"vector\"\n#include \"vendor.hpp\"\n#include <vendor.hpp>\n#include <cassert>\n"
+      "#include <cassert>\n#include \"vector\"\n#include <vector>\n#include \"vendor.hpp\"\n#include <vendor.hpp>\n"
       "#define vector <other.hpp>\n#include vector\nint value;\n#include vector\n#endif\n");
   CHECK(cleanup_output(output, true, "SECOND_GUARD") == output);
 }
@@ -182,7 +204,7 @@ TEST_CASE("hoisting includes before the outer guard preserves conditional preamb
       "#if INNER\n#include <string>\n#elifdef OTHER\n#include <only_other.hpp>\n#endif\n#endif\n";
   const auto output = cleanup_output(source, true, "PREAMBLE_GUARD", {"<vector>", "<string>"});
   CHECK(output == "#if PREAMBLE\n#include <vector>\n#endif\n#ifndef PREAMBLE_GUARD\n#define PREAMBLE_GUARD\n"
-      "#include <vector>\n#include <string>\n#if INNER\n#elifdef OTHER\n#include <only_other.hpp>\n#endif\n#endif\n");
+      "#include <string>\n#include <vector>\n#if INNER\n#elifdef OTHER\n#include <only_other.hpp>\n#endif\n#endif\n");
   CHECK(cleanup_output(output, true, "PREAMBLE_GUARD", {"<vector>", "<string>"}) == output);
 }
 
@@ -211,7 +233,7 @@ last
 %:endif
 )fixture";
   const auto output = cleanup_output(source, true, "EXAMPLE_GUARD", {"<vector>"});
-  CHECK(output.find("%:define EXAMPLE_GUARD\n#include <vector>\n#include <path//name.hpp>\n") != std::string::npos);
+  CHECK(output.find("%:define EXAMPLE_GUARD\n#include <path//name.hpp>\n#include <vector>\n") != std::string::npos);
   CHECK(output.find("/* Copyright 2026 Example, license retained. */") != std::string::npos);
   CHECK(output.find("/* prefix license */ /**/ /* rationale */") != std::string::npos);
   CHECK(output.find("// conditional duplicate rationale") != std::string::npos);
@@ -262,7 +284,7 @@ TEST_CASE("mixed guarded includes fail together with assembled lines and guardin
   CHECK_THROWS_WITH(cleanup_output(source, true, "AUDIT_GUARD", {"<unrelated>"}),
                     Catch::Matchers::ContainsSubstring("<thread>: unguarded"));
   const auto waived = cleanup_output(source, true, "AUDIT_GUARD", {"<thread>", "<alpha>"});
-  CHECK(waived == "#ifndef AUDIT_GUARD\n#define AUDIT_GUARD\n#include <thread>\n#include <alpha>\n"
+  CHECK(waived == "#ifndef AUDIT_GUARD\n#define AUDIT_GUARD\n#include <alpha>\n#include <thread>\n"
       "#if FEATURE\n#if NESTED\n#endif\n#else\n#endif\n#endif\n");
   CHECK(cleanup_output(waived, true, "AUDIT_GUARD") == waived);
   CHECK(cleanup_output(source, false) == source);
@@ -279,7 +301,7 @@ TEST_CASE("mixed-include audit distinguishes literal identities and ignores only
   CHECK_THROWS_WITH(cleanup_output(mixed_quote, true, "IDENTITY_GUARD", {"<thread>"}),
                     Catch::Matchers::ContainsSubstring("\"thread\": unguarded assembled lines 4; guarded assembled lines 6 [#ifndef VENDOR_GUARD (line 5)]"));
   const auto waived = cleanup_output(mixed_quote, true, "IDENTITY_GUARD", {"\"thread\""});
-  CHECK(waived == "#ifndef IDENTITY_GUARD\n#define IDENTITY_GUARD\n#include <thread>\n#include \"thread\"\n#ifndef VENDOR_GUARD\n#endif\n#endif\n");
+  CHECK(waived == "#ifndef IDENTITY_GUARD\n#define IDENTITY_GUARD\n#include \"thread\"\n#include <thread>\n#ifndef VENDOR_GUARD\n#endif\n#endif\n");
   CHECK_THROWS_WITH(cleanup_output(source, true, "IDENTITY_GUARD", {"thread"}),
                     Catch::Matchers::ContainsSubstring("including delimiters"));
 }
@@ -390,19 +412,15 @@ TEST_CASE("namespace merging treats directives and hidden structural macros as b
   const std::vector<std::string> sources = {
     "namespace api { int first; }\n#if FEATURE\nnamespace api { int second; }\n#endif\n",
     "namespace api { int first; }\n#define MODE 1\nnamespace api { int second; }\n",
-    "namespace api {\n#if FEATURE\nint first;\n#endif\n} namespace api { int second; }\n",
+    "namespace api {\n#if FEATURE\n}\n#else\n}\n#endif\nnamespace api { int second; }\n",
+    "namespace api {\n#if FEATURE\nnamespace inner {\n#endif\nint first; } } namespace api { int second; }\n",
     "#define SPLIT int marker; } namespace other { int\nnamespace api { SPLIT moved; } namespace api { int retained; }\n",
-    "#define EXTERNAL_ALIAS EXTERNAL_STRUCTURAL\nnamespace api { EXTERNAL_ALIAS int first; } namespace api { int second; }\n",
     "#define name other\nnamespace name { int first; } namespace name { int second; }\n",
     "#define NAME inner {} } namespace other { namespace inner\nnamespace api { namespace NAME {} } namespace api { int second; }\n",
     "#define namespace static_assert(__COUNTER__ < 100); namespace\nnamespace api { int first; } namespace api { int second; }\n#undef namespace\nint count() { return __COUNTER__; }\n",
     "#define int static_assert(true); } namespace other { int\nnamespace api { int moved; } namespace api { long retained; }\n",
     "#define alias int\n#define int static_assert(true); } namespace other { int\nnamespace api { alias moved; } namespace api { long retained; }\n",
-    "#define LOOP LOOP\nnamespace api { LOOP int first; } namespace api { int second; }\n",
-    "#define CALL(x) x\nnamespace api { CALL(int first;) } namespace api { int second; }\n",
-    "namespace api { TYPE moved; } namespace api { int retained; }\n",
-    "namespace api { external_boundary() int first; } namespace api { int second; }\n",
-    "namespace api { external_boundary } namespace api { int second; }\n"
+    "#define SWAP(a,b) b a\n#define ALIAS SWAP\nnamespace api { ALIAS(}, {) } namespace api { int second; }\n"
   };
   for (const auto &source : sources) { INFO(source); CHECK(merge_namespaces(source) == source); }
   const std::string harmless = "#define STORAGE inline\n#define VALUE 7\n#define ALIAS VALUE\n"
@@ -412,6 +430,26 @@ TEST_CASE("namespace merging treats directives and hidden structural macros as b
       "int first(int input) { return input; } } namespace api { "
       "Item item; Count count; int second() { return first(item.value); } }\n";
   CHECK(occurrences(merge_namespaces(declarations), "namespace api") == 1);
+  CHECK(occurrences(merge_namespaces("#define CALL(x) x\nnamespace API { CALL(int first;) } namespace API { int second; }\n"), "namespace API") == 1);
+  CHECK(occurrences(merge_namespaces("#define MOD(x) ((x) % 3)\n#define STR(x) #x\nnamespace API { int value = MOD(5); const char* text = STR(word); } namespace API { int second; }\n"), "namespace API") == 1);
+}
+
+TEST_CASE("namespace merging permits uppercase C++ names and scope-balanced internal conditionals", "[cleanup][namespaces]") {
+  const std::string source = "namespace csv { enum class DataType { CSV_NULL, CSV_BOOL };\n"
+      "namespace internals {\n#ifndef DOXYGEN_SHOULD_SKIP_THIS\nint data_type();\n#endif\n"
+      "inline int data_type() { return int(DataType::CSV_NULL); } } }\n"
+      "/** File description between namespaces. */\nnamespace csv { class CSVFormat; }\n"
+      "namespace csv { namespace internals { namespace parser {\n"
+      "#pragma region parser\n"
+      "#if defined(__EMSCRIPTEN__)\nint stream() { return 1; }\n"
+      "#elif FEATURE\nint mapped() { return 2; }\n#else\nint fallback() { return 3; }\n#endif\n#pragma endregion\n} } }\n";
+  const auto output = merge_namespaces(source);
+  CHECK(occurrences(output, "namespace csv") == 1);
+  CHECK(output.find("File description between namespaces.") != std::string::npos);
+  CHECK(output.find("#ifndef DOXYGEN_SHOULD_SKIP_THIS") != std::string::npos);
+  CHECK(output.find("#if defined(__EMSCRIPTEN__)") != std::string::npos);
+  CHECK(merge_namespaces(output) == output);
+  CHECK(occurrences(merge_namespaces("namespace api { using TYPE = int; TYPE value; template<class T> struct Box { T item; }; } namespace api { int next; }"), "namespace api") == 1);
 }
 
 TEST_CASE("namespace merging runs after include hoisting and before blank collapse", "[cleanup][namespaces][includes]") {

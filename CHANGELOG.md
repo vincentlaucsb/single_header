@@ -12,7 +12,7 @@
   waivers suppress only the audit and retain normal hoisting behavior.
 - Add opt-in recursive merging of supported adjacent namespace definitions after
   include processing. Preserve declaration order and preprocessing boundaries.
-- Automatically remove Doxygen file directives and collapse ordinary repeated
+- Automatically remove Doxygen file-documentation blocks and collapse ordinary repeated
   blank lines while protecting literal/comment content.
 - Add `--version`, sourced from the CMake project version. Release builds check out
   the requested tag and verify its agreement with the configured source version.

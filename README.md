@@ -27,8 +27,9 @@ The repository also includes a composite GitHub Action that downloads a released
 - Optionally moves supported function/method definitions into their declarations
   with a Clang 20 semantic backend; the default build remains lightweight.
 - Automatically collapses repeated ordinary blank lines and removes Doxygen
-  `@file`/`\file` metadata. Literal contents, comments, continued directives,
-  licenses, and Doxygen code/verbatim/fenced examples are preserved.
+  `@file`/`\file` documentation blocks, including their descriptions. License-bearing
+  blocks retain their text with only the directive/filename removed. Ordinary
+  comments, literal examples, and continued directives are preserved.
 
 Cleanup applies to both ordinary generation and stitching. Include deduplication
 is **off by default**, so unresolved include directives retain their repetitions.
@@ -52,7 +53,7 @@ An unrelated waiver never hides another header's conflict. Deduplication off ski
 the audit.
 
 The pass gathers all literal `<...>` and `"..."` includes with no
-conditional guard except the configured outer guard, in first-seen order, and
+conditional guard except the configured outer guard, in alphabetical header-path order, and
 places them immediately after that guard's opening `#define`. Ordinary code,
 namespaces, and unrelated macro definitions do not stop the pass. Angle and
 quoted names are separate identities. Repeats after the new block are removed,
@@ -78,9 +79,10 @@ an enabled configuration. Only adjacent ordinary named namespace blocks separate
 by whitespace/comments are candidates. Merging outer blocks can expose inner
 blocks, which are processed recursively without a fixed nesting limit.
 
-Preprocessor boundaries and known structural macros prevent merging. Compact
-`namespace a::b` syntax, inline/anonymous/attributed namespaces, and ambiguous
-macro-shaped declarations are left unchanged. The lightweight pass cannot know
+Conditional namespace boundaries and known structural macro expansions prevent
+merging. Compact `namespace a::b` syntax and inline/anonymous/attributed namespaces
+remain unchanged. Internal conditionals, uppercase identifiers, and nonstructural
+macros do not prevent merging. The lightweight pass cannot know
 arbitrary macro definitions supplied only by external headers or compiler flags;
 use it when those macros do not hide namespace boundaries. It is an optional
 structural cleanup, not a general C++ equivalence proof. Compiler-backed stitching
