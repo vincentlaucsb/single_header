@@ -1,5 +1,6 @@
 #include "helpers.hpp"
 #include "stitching.hpp"
+#include "clang_sdk_allocator.hpp"
 
 #include <clang/AST/ASTConsumer.h>
 #include <clang/AST/ASTContext.h>
@@ -25,6 +26,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -127,6 +129,7 @@ struct IdentityIndex {
   std::set<std::string> files;
   std::string artifact;
   std::map<std::string, std::set<std::string>> origins;
+  bool frozen = false;
 };
 std::string mapped_identity(const Decl *, ASTContext &, IdentityIndex &,
                             const std::string &);
@@ -568,7 +571,8 @@ std::string mapped_identity(const Decl *decl, ASTContext &ctx,
   if (range.file != index.artifact) {
     const auto origin =
         "origin:" + range.file + ':' + std::to_string(range.begin);
-    index.origins[signature].insert(origin);
+    if (!index.frozen)
+      index.origins[signature].insert(origin);
     return origin;
   }
   const auto found = index.origins.find(signature);
@@ -1156,7 +1160,7 @@ ParseResult parse(const tooling::CompileCommand &command,
   return result;
 }
 std::string compare(const ParseResult &before, const ParseResult &after,
-                    std::string *detail = nullptr) {
+                    std::string *detail = nullptr, bool exact = true) {
   if (after.errors)
     return "destination_parse_error";
   for (const auto &[key, record] : before.bodies) {
@@ -1192,6 +1196,18 @@ std::string compare(const ParseResult &before, const ParseResult &after,
             (found == after.declarations.end() ? "<missing>" : found->second) +
             '\n';
       return "changed_declaration:" + key;
+    }
+  }
+  if (exact) {
+    for (const auto &[key, record] : after.bodies) {
+      (void)record;
+      if (!before.bodies.count(key))
+        return "added_definition:" + key;
+    }
+    for (const auto &[key, record] : after.declarations) {
+      (void)record;
+      if (!before.declarations.count(key))
+        return "added_declaration:" + key;
     }
   }
   return {};
@@ -1297,7 +1313,7 @@ std::string stitch_functions(const Options &options,
                  {"baseline", "valid"}};
   report["baselineDifferences"] = json::array();
   std::set<std::string> baseline_difference_keys;
-  std::vector<ParseResult> originals;
+  std::vector<ParseResult> originals, baselines;
   std::map<std::string, Candidate> candidates;
   const auto legacy = render({});
   std::string baseline_problem, baseline_diagnostics;
@@ -1334,28 +1350,52 @@ std::string stitch_functions(const Options &options,
                             candidate.definition.where.begin))
         found->second.reason = "ambiguous_definition";
     }
-    const auto baseline = parse(command, env, &legacy);
-    std::string comparison_detail;
-    const auto problem = compare(original, baseline, &comparison_detail);
-    if (!problem.empty() && !baseline.errors) {
+    originals.push_back(std::move(original));
+  }
+  // Populate every original-file provenance entry before recording generated
+  // identities. A later TU may introduce an internal declaration absent from an
+  // earlier TU, but present in the artifact seen by every context.
+  env.identities.frozen = true;
+  for (unsigned i = 0; i < commands.size(); ++i) {
+    const auto &command = commands[i];
+    const auto &original = originals[i];
+    auto baseline = parse(command, env, &legacy);
+    // Original TUs discover/classify candidates. Only the generated, unstitched
+    // artifact is the relocation baseline: collation can already change the
+    // program before any body is moved. Record those differences separately.
+    if (!baseline.errors) {
       for (const auto &[key, record] : original.bodies) {
         if (report["baselineDifferences"].size() >= 10)
           break;
         ParseResult single;
         single.bodies.emplace(key, record);
         std::string detail;
-        const auto difference = compare(single, baseline, &detail);
+        const auto difference = compare(single, baseline, &detail, false);
         if (!difference.empty() &&
             baseline_difference_keys.insert(difference).second)
           report["baselineDifferences"].push_back(
-              {{"reason", difference}, {"detail", detail}});
+              {{"source", command.Filename}, {"reason", difference},
+               {"detail", detail}, {"severity", "informational"}});
+      }
+      for (const auto &[key, record] : original.declarations) {
+        if (report["baselineDifferences"].size() >= 10)
+          break;
+        ParseResult single;
+        single.declarations.emplace(key, record);
+        std::string detail;
+        const auto difference = compare(single, baseline, &detail, false);
+        if (!difference.empty() &&
+            baseline_difference_keys.insert(difference).second)
+          report["baselineDifferences"].push_back(
+              {{"source", command.Filename}, {"reason", difference},
+               {"detail", detail}, {"severity", "informational"}});
       }
     }
-    if (!problem.empty() && baseline_problem.empty()) {
-      baseline_problem = problem;
-      baseline_diagnostics = comparison_detail + baseline.diagnostics;
+    if (baseline.errors && baseline_problem.empty()) {
+      baseline_problem = "destination_parse_error";
+      baseline_diagnostics = baseline.diagnostics;
     }
-    originals.push_back(std::move(original));
+    baselines.push_back(std::move(baseline));
   }
   if (!baseline_problem.empty()) {
     report["baseline"] = "invalid";
@@ -1390,7 +1430,7 @@ std::string stitch_functions(const Options &options,
           const auto tentative = parse(commands[i], env, &artifact);
           std::string comparison_detail;
           candidate.reason =
-              compare(originals[i], tentative, &comparison_detail);
+              compare(baselines[i], tentative, &comparison_detail);
           if (!candidate.reason.empty()) {
             candidate.diagnostics = comparison_detail + tentative.diagnostics;
             break;
@@ -1435,7 +1475,7 @@ std::string stitch_functions(const Options &options,
   if (!accepted.empty()) {
     for (unsigned i = 0; i < commands.size(); ++i) {
       const auto final_result = parse(commands[i], env, &output);
-      if (!compare(originals[i], final_result).empty())
+      if (!compare(baselines[i], final_result).empty())
         throw std::runtime_error(
             "final stitching validation failed; no output was written");
     }
@@ -1457,6 +1497,10 @@ std::string stitch_functions(const Options &options,
       std::chrono::duration_cast<std::chrono::milliseconds>(
           std::chrono::steady_clock::now() - started)
           .count();
+  report["bytes"] = {
+      {"unstitched", legacy.size()}, {"stitched", output.size()},
+      {"savings", static_cast<std::int64_t>(legacy.size()) -
+                      static_cast<std::int64_t>(output.size())}};
   report["retainsImplementation"] =
       accepted.size() != candidates.size() ||
       std::any_of(

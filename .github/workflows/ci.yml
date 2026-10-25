@@ -35,12 +35,15 @@ jobs:
           - name: GCC consumers
             consumer: g++
             flags: ""
+            unsanitized-sdk: "OFF"
           - name: Clang consumers
             consumer: clang++-20
             flags: ""
+            unsanitized-sdk: "OFF"
           - name: Clang ASan and UBSan
             consumer: clang++-20
             flags: "-fsanitize=address,undefined -fno-omit-frame-pointer"
+            unsanitized-sdk: "ON"
     steps:
       - uses: actions/checkout@v4
       - name: Install LLVM 20 development libraries
@@ -55,6 +58,7 @@ jobs:
           -DCMAKE_CXX_COMPILER=${{ matrix.consumer }}
           -DCMAKE_CXX_FLAGS="${{ matrix.flags }}"
           -DSINGLE_HEADER_WITH_CLANG=ON
+          -DSINGLE_HEADER_CLANG_UNSANITIZED_SDK=${{ matrix.unsanitized-sdk }}
           -DLLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm
           -DClang_DIR=/usr/lib/llvm-20/lib/cmake/clang
       - name: Build
@@ -63,4 +67,5 @@ jobs:
         env:
           CXX: ${{ matrix.consumer }}
           CXXFLAGS: ${{ matrix.flags }}
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: ctest --test-dir build --output-on-failure --parallel 2

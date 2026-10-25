@@ -589,8 +589,8 @@ TEST_CASE("local closure members retain their lexical identity before "
   CHECK(fixture.reason(data, "residual").find("unsupported_ast:") == 0);
 }
 
-TEST_CASE("source-only attributes remain an explicit legacy baseline "
-          "limitation across TUs",
+TEST_CASE("source-only attribute differences are informational while safe "
+          "neighbors move across TUs",
           "[stitching][baseline]") {
   StitchFixture fixture("source_attributes");
   fixture.files(
@@ -600,17 +600,83 @@ TEST_CASE("source-only attributes remain an explicit legacy baseline "
   write_text(fixture.include / "safe.cpp",
              "#include \"api.hpp\"\nint safe() { return 7; }\n");
   const auto data = fixture.generate();
-  CHECK(data.at("baseline") == "invalid");
-  CHECK(data.at("baselineReason")
-            .get<std::string>()
-            .find("changed_declaration:attributes:") == 0);
-  CHECK(data.at("baselineDiagnostics").get<std::string>().find("nonnull") !=
+  CHECK(data.at("baseline") == "valid");
+  REQUIRE_FALSE(data.at("baselineDifferences").empty());
+  const auto &difference = data.at("baselineDifferences").front();
+  CHECK(difference.at("reason").get<std::string>().find(
+            "changed_declaration:attributes:") == 0);
+  CHECK(difference.at("detail").get<std::string>().find("nonnull") !=
         std::string::npos);
+  CHECK(difference.at("severity") == "informational");
+  CHECK(fixture.reason(data, "safe") == "accepted");
+  CHECK(fixture.reason(data, "Box::method") == "unsupported_attribute");
+  CHECK(data.at("counts").at("removedBodies") == 1);
+  const auto stitched = read_text(fixture.output);
+  CHECK(stitched.find("inline int safe() { return 7; }") != std::string::npos);
+  run_command(fixture.command("off"));
+  const auto unstitched = read_text(fixture.output);
+  CHECK(data.at("bytes").at("unstitched") == unstitched.size());
+  CHECK(data.at("bytes").at("stitched") == stitched.size());
+  CHECK(data.at("bytes").at("savings") ==
+        static_cast<std::int64_t>(unstitched.size()) -
+            static_cast<std::int64_t>(stitched.size()));
+}
+
+TEST_CASE("preexisting collation differences never hide a changed overload",
+          "[stitching][baseline][lookup]") {
+  StitchFixture fixture("attribute_and_changed_overload");
+  fixture.files(
+      "#pragma once\nstruct Box { int method(int *); };\n"
+      "int pick(long);\nint run();\nint pick(int);\nint safe();\n",
+      "__attribute__((nonnull(2))) int Box::method(int *input) { return "
+      "*input; }\nint pick(long) { return 1; }\n"
+      "int pick(int) { return 2; }\nint run() { return pick(0); }\n");
+  write_text(fixture.include / "safe.cpp",
+             "#include \"api.hpp\"\nint safe() { return 7; }\n");
+  const auto data = fixture.generate();
+  CHECK(data.at("baseline") == "valid");
+  CHECK_FALSE(data.at("baselineDifferences").empty());
+  CHECK(fixture.reason(data, "safe") == "accepted");
+  CHECK(fixture.reason(data, "run").find("changed_semantics:") == 0);
+  CHECK(data.at("counts").at("removedBodies") == 3);
+  const auto text = read_text(fixture.output);
+  CHECK(text.find("int run();") != std::string::npos);
+  CHECK(text.find("int run() { return pick(0); }") != std::string::npos);
+}
+
+TEST_CASE("an unparseable unstitched artifact blocks relocation explicitly",
+          "[stitching][baseline]") {
+  StitchFixture fixture("unparseable_baseline");
+  fixture.files("#pragma once\nint safe();\n",
+                "static int collision = 1;\nint safe() { return 7; }\n");
+  // Both original TUs parse, but collation redefines a source-local name.
+  write_text(fixture.include / "other.cpp", "static int collision = 2;\n");
+  const auto data = fixture.generate();
+  CHECK(data.at("baseline") == "invalid");
+  CHECK(data.at("baselineReason") == "destination_parse_error");
+  CHECK_FALSE(data.at("baselineDiagnostics").get<std::string>().empty());
   CHECK(fixture.reason(data, "safe") == "baseline_invalid");
   CHECK(data.at("counts").at("removedBodies") == 0);
-  const auto original = read_text(fixture.output);
+  const auto unchanged = read_text(fixture.output);
   run_command(fixture.command("off"));
-  CHECK(read_text(fixture.output) == original);
+  CHECK(read_text(fixture.output) == unchanged);
+}
+
+TEST_CASE("all original provenance is collected before generated baselines",
+          "[stitching][baseline][origins]") {
+  StitchFixture fixture("complete_baseline_provenance");
+  fixture.files("#pragma once\nint safe();\nint residual();\n",
+                "int safe() { return 7; }\n");
+  // This constant is absent from the first original TU. Every generated context
+  // sees it, so baselines must wait until discovery has visited the second TU.
+  write_text(fixture.include / "z_residual.cpp",
+             "#include \"api.hpp\"\nnamespace { const int value = 3; }\n"
+             "int residual() { return value; }\n");
+  const auto data = fixture.generate();
+  CHECK(data.at("baseline") == "valid");
+  CHECK(fixture.reason(data, "safe") == "accepted");
+  CHECK(fixture.reason(data, "residual") == "internal_dependency");
+  CHECK(data.at("counts").at("removedBodies") == 1);
 }
 
 TEST_CASE(

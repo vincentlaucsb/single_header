@@ -107,8 +107,10 @@ are distinct from relocating their definitions.
 
 ## Validation boundary and diagnostics
 
-The frontend parses the original TUs and the exact generated artifact under every
-supplied source context. Destination parses replace the main source once with an
+The frontend parses the original TUs for discovery and classification, then saves
+semantic records for the exact unstitched generated artifact under every supplied
+source context. This generated artifact is the baseline for every tentative and
+final stitched artifact. Destination parses replace the main source once with an
 include of an in-memory artifact. A preprocessor entry assertion verifies that the
 artifact was actually analyzed. No `#line` directives or preprocessed output are
 inserted to mask source-location changes. Error recovery ASTs are never inspected.
@@ -120,7 +122,9 @@ defaults used at calls, declaration attributes, global/member initializers and
 named class layouts. Expanded body-token records detect destination macro changes,
 including identifiers that only become macros after movement. Internal declarations
 that remain in place use unique kind/name/type/raw-token provenance to map back to
-their original file and byte offset; ambiguous provenance fails comparison. Locals
+their original file and byte offset; ambiguous provenance fails comparison. The
+complete original provenance index is collected before any generated baseline is
+recorded, so every supplied context uses the same identity mapping. Locals
 and parameters use corresponding traversal ordinals rather than AST addresses.
 Residual non-type template parameters use their depth, index, canonical type and
 pack status within the corresponding function record; templates remain deferred
@@ -134,25 +138,32 @@ without discarding overload or argument identity. Anonymous enum types use their
 source-independent compiler declaration USRs when available; location-based or
 ambiguous identities remain a conservative limitation.
 
-Original mapped bodies and declaration records are compared after each accepted
-edit, including residual code, and the final accepted batch is checked again.
+Unstitched generated bodies and declaration records are compared after each
+accepted edit, including residual code, and the final accepted batch is checked
+again. Comparison checks both directions: added and missing recorded definitions
+or declarations also reject relocation.
 Unknown constructs prevent candidate acceptance. Delayed, uninstantiated template
 bodies do not supply a semantic record and remain outside the transformation
 guarantee. This is a bounded source-relocation check for its declared vocabulary,
 not a proof of arbitrary C++ equivalence or future template instantiations.
 
-If the unchanged legacy artifact fails parsing or comparison, the report records a
-separate `baseline_invalid` limitation and returns unchanged legacy output. This is
-not an original-source analysis failure and does not claim the legacy artifact is
-safe. A successful check covers the supplied configurations only. Multiple commands
+Original-to-unstitched differences are reported separately in `baselineDifferences`
+as informational diagnostics. They describe preexisting collation behavior and
+cannot veto relocation. If the unstitched artifact fails parsing, the report marks
+`baseline` as `invalid`, records its compiler diagnostics and
+`destination_parse_error` reason, and blocks relocation with `baseline_invalid`.
+The unchanged legacy output does not carry a semantic safety claim. A successful
+delta check covers the supplied configurations only. Multiple commands
 for a source are deliberately rejected; validate separate builds/configurations
 explicitly. Consumer macros, different compiler semantics, unmodeled extensions,
 and uninstantiated templates are not universally proven.
 
 Diagnostics go to stderr. The optional version-1 JSON report records contexts,
 locations, accepted/skipped reasons and compiler diagnostics, matching and removal
-counts, functions already inline, elapsed analysis time, and retained implementation
-state. The report must be outside scanned roots and distinct from inputs, config,
+counts, functions already inline, elapsed analysis time, retained implementation
+state, and `bytes` (`unstitched`, `stitched`, signed `savings`). Original-to-unstitched
+diagnostics are deduplicated by reason and bounded to ten records. The report must
+be outside scanned roots and distinct from inputs, config,
 database and output, including existing filesystem aliases. Remaining definitions
 and source globals can still require a one-TU implementation section. Stitching does
 not promise faster code, stable binary ABI, or a wholly header-only result.
@@ -178,6 +189,15 @@ goldens and the original compilation check. Enabled Linux CI exercises GCC and
 Clang consumer builds with the same Clang 20 semantic backend, plus a Clang
 ASan/UBSan build of the analysis/edit code.
 
+That sanitizer job links the distribution's unsanitized LLVM SDK and sets
+`SINGLE_HEADER_CLANG_UNSANITIZED_SDK=ON`. LLVM 20's inline arena allocator otherwise
+mixes client-side poisoning with SDK allocations that do not unpoison the arena,
+causing a startup use-after-poison report. The compatibility header matches only
+LLVM's manual arena annotations to the SDK. Source ASan/UBSan instrumentation,
+heap bounds and use-after-free checks remain enabled; arena suballocation redzones
+require an LLVM SDK built with matching sanitizers. Leave the option OFF with a
+sanitized SDK. No runtime sanitizer suppressions are used.
+
 On Windows/MSVC 19.51 with LLVM 20.1.8, the enabled semantic/link/runtime suite and
 the independent lightweight build were run locally during implementation. See the
 PR validation notes for final counts and the pinned latest csv-parser integration
@@ -199,14 +219,14 @@ were compiled and linked locally with MSVC 19.51 and Clang 20.1.8. Two-TU consum
 also parsed 500,000 rows through both mmap and stream paths, including distinct
 quoted fields and embedded newlines (46,619,067 bytes).
 
-For this configuration, all mode retains all 91 source definitions. The report
-identifies a genuine preexisting legacy-collation limitation: the `CSV_NON_NULL(2)`
+The original-to-unstitched report identifies a preexisting collation difference:
+the `CSV_NON_NULL(2)`
 attribute on the source definition of the `CSVRow::iterator` constructor becomes
-visible in TUs that originally saw an unannotated header declaration. The backend
-preserves attribute comparison and returns unchanged legacy output with an explicit
-baseline limitation. This corpus establishes compilation and safe fallback; it
-does not establish CSV relocation coverage. The accepted string/vector/method and
-multi-TU runtime cases in the repository tests exercise actual relocation separately.
+visible in TUs that originally saw an unannotated header declaration. This is an
+informational diagnostic. Relocation compares against the unstitched generated
+artifact, preserving its attribute records while permitting safe neighboring
+functions to move. The report measures actual accepted definitions and byte savings;
+see the PR validation notes for the completed corpus run.
 
 The analysis invocation was equivalent to:
 
