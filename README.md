@@ -13,14 +13,28 @@ The repository also includes a composite GitHub Action that downloads a released
 ## Features
 
 - Scans `.h`, `.hpp`, and `.cpp` files from one or more include roots.
-- Preserves system includes while inlining known project-local includes.
+- Inlines each known project header once, including diamond dependencies and
+  repeated quote/angle references to the same header.
+- Removes redundant recognized standard-library includes within an uninterrupted
+  include group within a preprocessing branch, preserving their original positions. Unknown/vendor
+  headers, assertion headers, nested includes and preprocessing barriers remain.
 - Optionally limits output to headers reachable from an entry header.
 - Supports extra source files, directories, or glob patterns.
 - Rewrites selected `#define NAME` directives with CLI or JSON config values.
 - Splices stripped source text into a configurable implementation marker, or
   appends source text when no marker is found.
 - Optionally moves supported function/method definitions into their declarations
-  with a Clang 20 semantic backend; default generation remains unchanged.
+  with a Clang 20 semantic backend; the default build remains lightweight.
+- Automatically collapses repeated ordinary blank lines and removes Doxygen
+  `@file`/`\file` metadata. Literal contents, comments, continued directives,
+  licenses, and Doxygen code/verbatim/fenced examples are preserved.
+
+Cleanup applies to both ordinary generation and stitching. Include deduplication
+does not hoist headers or combine separate conditional branches. Macro changes,
+unknown includes, pragmas and ordinary code invalidate include reuse. Comments and
+whitespace may separate includes within a group. Repeated `<cassert>`/`<assert.h>`
+remain because their reinclusion can depend on `NDEBUG`. Includes with trailing comments remain
+intact, preserving rationale and license text.
 
 ## Building
 

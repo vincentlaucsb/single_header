@@ -10,6 +10,27 @@ TEST_CASE("generates golden output for csv-parser style fixture", "[golden]") {
                   quote_value("/** INSERT_CSV_SOURCES **/"));
 }
 
+TEST_CASE("known project headers deduplicate diamond quote and angle includes", "[cleanup][includes]") {
+  const auto work = output_dir() / "include_diamond";
+  const auto include = work / "include";
+  fs::create_directories(include);
+  write_text(include / "shared.hpp", "#pragma once\nstruct SharedDiamond { int value; };\n");
+  write_text(include / "left.hpp", "#pragma once\n#include \"shared.hpp\"\n");
+  write_text(include / "right.hpp", "#pragma once\n#include <shared.hpp>\n");
+  write_text(include / "api.hpp", "#pragma once\n#include \"left.hpp\"\n#include \"right.hpp\"\n"
+      "#include \"shared.hpp\"\n#include <shared.hpp>\n#include <vendor.hpp>\n#include <vendor.hpp>\n");
+  const auto output = work / "generated.hpp";
+  run_command(quote(tool_path()) + " --include-root " + quote(include) +
+              " --entry " + quote(include / "api.hpp") + " --output " + quote(output));
+  const auto text = read_text(output);
+  const auto marker = text.find("struct SharedDiamond");
+  REQUIRE(marker != std::string::npos);
+  CHECK(text.find("struct SharedDiamond", marker + 1) == std::string::npos);
+  CHECK(text.find("#include \"shared.hpp\"") == std::string::npos);
+  CHECK(text.find("#include <shared.hpp>") == std::string::npos);
+  CHECK(text.find("#include <vendor.hpp>\n#include <vendor.hpp>") != std::string::npos);
+}
+
 TEST_CASE("generated header compiles in multiple translation units", "[compile-smoke]") {
   const auto fixture = fixture_dir() / "compile_smoke";
   const auto work = output_dir() / "compile_smoke";

@@ -23,6 +23,7 @@ add_executable(single_header
   src/cli.cpp
   src/config.cpp
   src/helpers.cpp
+  src/output_cleanup.cpp
   src/stitching.cpp
   src/main.cpp)
 target_compile_features(single_header PRIVATE cxx_std_17)
@@ -83,7 +84,7 @@ if(BUILD_TESTING)
   set(TEST_FIXTURE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
   set(TEST_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-output")
 
-  add_executable(single_header_tests tests/test_cli.cpp)
+  add_executable(single_header_tests tests/test_cli.cpp tests/test_output_cleanup.cpp src/output_cleanup.cpp)
   target_compile_features(single_header_tests PRIVATE cxx_std_17)
   target_link_libraries(single_header_tests PRIVATE Catch2::Catch2WithMain)
   target_link_libraries(single_header_tests PRIVATE nlohmann_json::nlohmann_json)

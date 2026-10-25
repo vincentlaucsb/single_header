@@ -1,6 +1,7 @@
 #include "amalgamator.hpp"
 
 #include "helpers.hpp"
+#include "output_cleanup.hpp"
 #include "stitching.hpp"
 
 #include <algorithm>
@@ -353,7 +354,7 @@ std::string generate(const Options &options) {
       header_concat += source_concat;
     }
 
-    return "#pragma once\n" + header_concat;
+    return cleanup_output("#pragma once\n" + header_concat);
   };
   if (options.function_stitching != "off") {
     return stitch_functions(options, files.headers, files.sources, render);

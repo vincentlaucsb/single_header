@@ -6,6 +6,17 @@ The default build and release binaries retain the lightweight generator; request
 stitching from those binaries fails with build instructions. Explicit `off`
 overrides JSON configuration and follows the original generation path.
 
+Both generation paths apply automatic final-output cleanup: ordinary repeated
+blank lines collapse, Doxygen file directives lose only their command/optional
+filename, and redundant recognized standard-library includes are removed within
+one uninterrupted include group in a preprocessing branch at global scope. The first include stays
+in place. Branch boundaries, macro changes, unknown includes and pragmas invalidate
+reuse; assertion headers and trailing-comment includes remain. Ordinary code,
+including possible macro invocations, ends an include group; comments and whitespace
+may separate its includes. Literal/comment payloads, continued
+directives, licenses and Doxygen code/verbatim/fenced examples are protected.
+The same cleanup is part of every unstitched baseline, trial and final renderer.
+
 The implementation lives in `src/stitching/`: `engine.cpp` coordinates discovery,
 generated baselines, trial batches and reports; `frontend.cpp` owns Clang parsing
 and candidate collection; `semantics.cpp` fingerprints types, identities and ASTs;
@@ -258,7 +269,7 @@ were compiled and linked locally with MSVC 19.51 and Clang 20.1.8. Two-TU consum
 also parsed 500,000 rows through both mmap and stream paths, including distinct
 quoted fields and embedded newlines (46,619,067 bytes).
 
-With the expanded support and shared indexes, the nine-context run relocated
+Before automatic output cleanup, the expanded support and shared indexes relocated
 69 of 91 definitions (one free function and 68 methods), reducing the generated
 header from 680,603 to 675,072 bytes (5,531 bytes saved). Analysis took 62,734 ms
 (63,386 ms external wall time), compared with 1,791,489 ms for the earlier
@@ -268,6 +279,18 @@ The final run made nine discovery parses, nine baseline parses, ten trial parses
 and nine fresh final parses. One diagnostic-guided partition isolated a relocation
 that needed a source-only helper; canonical edit-set caching reused its failed
 batch result. The report recorded 1,014,596 canonical-type cache hits.
+
+With cleanup enabled on the same upstream revision and nine contexts, all 69
+definitions still relocate. The unstitched baseline is 680,124 bytes and the final
+header is 674,256 bytes: 5,868 bytes saved by stitching with cleanup applied to
+both sides. Cleanup alone saves 479 bytes on the unstitched header and 816 bytes
+on the previously stitched header. The combined reduction from the original
+680,603-byte output is 6,347 bytes. It removes 13 redundant standard-header
+directives (253 to 240 angle includes), all 27 Doxygen file directives, and
+ordinary repeated blank-line runs. The final run took 58,563 ms analysis and
+58,631 ms external wall time, with the same 37 frontend parses and skip reasons;
+these timings vary between local runs. Both compilers and the unstitched control
+passed the runtime groups described below on the cleaned output.
 
 MSVC and Clang consumers also passed the upstream 56-case suite (87,097
 assertions), the 500,000-row dual-path runtime check, and exception-enabled and
