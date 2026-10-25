@@ -37,7 +37,12 @@ if(SINGLE_HEADER_WITH_CLANG)
   if(NOT LLVM_VERSION_MAJOR EQUAL 20)
     message(FATAL_ERROR "Function stitching is pinned to LLVM/Clang 20")
   endif()
-  target_sources(single_header PRIVATE src/stitching_clang.cpp)
+  target_sources(single_header PRIVATE
+    src/stitching/engine.cpp
+    src/stitching/frontend.cpp
+    src/stitching/semantics.cpp
+    src/stitching/source.cpp
+    src/stitching/validation.cpp)
   target_include_directories(single_header SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS} ${CLANG_INCLUDE_DIRS})
   target_compile_definitions(single_header PRIVATE SINGLE_HEADER_WITH_CLANG=1)
   if(SINGLE_HEADER_CLANG_UNSANITIZED_SDK)
@@ -48,7 +53,9 @@ if(SINGLE_HEADER_WITH_CLANG)
   if(MSVC)
     target_link_options(single_header PRIVATE /STACK:33554432)
     # Clang's heavily instantiated visitor emits spurious C4702 under MSVC.
-    set_source_files_properties(src/stitching_clang.cpp PROPERTIES COMPILE_OPTIONS /wd4702)
+    set_source_files_properties(
+      src/stitching/frontend.cpp src/stitching/semantics.cpp
+      PROPERTIES COMPILE_OPTIONS /wd4702)
   endif()
 endif()
 

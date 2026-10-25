@@ -6,6 +6,15 @@ The default build and release binaries retain the lightweight generator; request
 stitching from those binaries fails with build instructions. Explicit `off`
 overrides JSON configuration and follows the original generation path.
 
+The implementation lives in `src/stitching/`: `engine.cpp` coordinates discovery,
+generated baselines, trial batches and reports; `frontend.cpp` owns Clang parsing
+and candidate collection; `semantics.cpp` fingerprints types, identities and ASTs;
+`source.cpp` handles physical ranges, directives and paired edits; and
+`validation.cpp` compares recorded artifact semantics. Internal headers define
+their interfaces and shared model. `clang_sdk_allocator.hpp` isolates SDK allocator
+compatibility and is included before Clang/LLVM headers in each frontend-facing
+translation unit. The public entry point remains in `src/stitching.hpp`.
+
 ## Build and compilation context
 
 Install LLVM **20** development headers and libraries, including Clang LibTooling,
