@@ -27,6 +27,7 @@ struct Expansion {
   Span where;
   std::string name;
   bool annotation;
+  bool body_safe = false;
 };
 struct Record {
   std::string semantics, tokens, unsupported;
@@ -53,13 +54,8 @@ struct ParseResult {
   bool artifact_seen = false;
   bool source_state = false;
   std::string diagnostics;
-};
-struct Environment {
-  std::set<std::string> headers, sources;
-  std::map<std::string, std::string> input;
-  std::set<std::string> annotations;
-  mutable IdentityIndex identities;
-  std::string artifact;
+  std::size_t type_cache_hits = 0, type_cache_entries = 0;
+  std::vector<unsigned> artifact_error_offsets;
 };
 struct PhysicalToken {
   std::string text;
@@ -70,6 +66,19 @@ struct Directive {
   std::vector<std::string> words;
   unsigned begin, end;
   std::size_t first, last;
+};
+struct FileFacts {
+  std::vector<PhysicalToken> tokens;
+  std::vector<Directive> directives;
+  bool whole_file_guard = false;
+};
+struct Environment {
+  std::set<std::string> headers, sources;
+  std::map<std::string, std::string> input;
+  std::map<std::string, FileFacts> lexical;
+  std::set<std::string> annotations;
+  mutable IdentityIndex identities;
+  std::string artifact;
 };
 
 } // namespace single_header::stitching

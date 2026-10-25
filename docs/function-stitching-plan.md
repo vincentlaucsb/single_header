@@ -1,5 +1,10 @@
 # Compiler features for function stitching
 
+This document preserves the original design and staged scope. The implemented
+support boundary, batching strategy, caches and validation behavior are documented
+in [function-stitching.md](function-stitching.md), which takes precedence over
+earlier deferrals below.
+
 Revised review and implementation plan for [issue 1, free functions](https://github.com/vincentlaucsb/single_header/issues/1) and [issue 2, class methods](https://github.com/vincentlaucsb/single_header/issues/2). Repository implementation inspected at `56fd9f9`; analysis updated October 25, 2026.
 
 Both proposals are viable as restricted source transformations backed by compiler frontend analysis. The useful boundary is to let a mature frontend understand ordinary C++, while allowing this tool to relocate only constructs for which it implements explicit checks. A tokenizer is one component, not the semantic limit of the design.

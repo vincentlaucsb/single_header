@@ -27,7 +27,8 @@ std::string file_name(SourceLocation loc, const SourceManager &sm) {
                       : normalize_path(fs::path(name.str())).generic_string();
 }
 
-Span span(SourceRange range, const SourceManager &sm, const LangOptions &lang) {
+Span span(SourceRange range, const SourceManager &sm, const LangOptions &lang,
+          const std::string *known_file) {
   if (range.isInvalid() || range.getBegin().isMacroID() ||
       range.getEnd().isMacroID())
     return {};
@@ -36,7 +37,7 @@ Span span(SourceRange range, const SourceManager &sm, const LangOptions &lang) {
       Lexer::getLocForEndOfToken(sm.getFileLoc(range.getEnd()), 0, sm, lang);
   if (end.isInvalid() || sm.getFileID(begin) != sm.getFileID(end))
     return {};
-  return {file_name(begin, sm), sm.getFileOffset(begin), sm.getFileOffset(end)};
+  return {known_file ? *known_file : file_name(begin, sm), sm.getFileOffset(begin), sm.getFileOffset(end)};
 }
 std::vector<PhysicalToken> raw_tokens(const std::string &text) {
   LangOptions language;
@@ -78,9 +79,12 @@ std::vector<Directive> directives(const std::vector<PhysicalToken> &tokens,
   }
   return result;
 }
-bool conditional_range(const std::string &text, unsigned begin, unsigned end) {
-  const auto tokens = raw_tokens(text);
-  const auto commands = directives(tokens, static_cast<unsigned>(text.size()));
+FileFacts inspect_source(const std::string &text) {
+  FileFacts facts;
+  facts.tokens = raw_tokens(text);
+  facts.directives = directives(facts.tokens, static_cast<unsigned>(text.size()));
+  const auto &tokens = facts.tokens;
+  const auto &commands = facts.directives;
   bool guard =
       commands.size() >= 3 && commands[0].first == 0 &&
       commands[0].words.size() == 2 && commands[0].words[0] == "ifndef" &&
@@ -104,6 +108,41 @@ bool conditional_range(const std::string &text, unsigned begin, unsigned end) {
     if (kind == "endif" && depth == 0 && &command != &commands.back())
       guard = false;
   }
+  facts.whole_file_guard = guard;
+  return facts;
+}
+std::vector<std::string> conditional_context(const FileFacts &facts, unsigned offset) {
+  std::vector<std::string> stack;
+  for (const auto &directive : facts.directives) {
+    if (directive.begin >= offset)
+      break;
+    if (directive.words.empty())
+      continue;
+    const auto &kind = directive.words.front();
+    std::string spelling;
+    for (const auto &word : directive.words)
+      spelling += std::to_string(word.size()) + ':' + word + ';';
+    if (kind == "if" || kind == "ifdef" || kind == "ifndef")
+      stack.push_back(std::move(spelling));
+    else if ((kind == "else" || kind == "elif") && !stack.empty())
+      stack.back() += spelling;
+    else if (kind == "endif" && !stack.empty())
+      stack.pop_back();
+  }
+  if (facts.whole_file_guard && !stack.empty())
+    stack.erase(stack.begin());
+  return stack;
+}
+bool has_tokens_between(const FileFacts &facts, unsigned begin, unsigned end) {
+  const auto token = std::lower_bound(facts.tokens.begin(), facts.tokens.end(), begin,
+      [](const PhysicalToken &entry, unsigned value) { return entry.offset < value; });
+  return token != facts.tokens.end() && token->offset < end;
+}
+bool conditional_range(const FileFacts &facts, unsigned begin, unsigned end,
+                       bool allow_internal) {
+  const auto &commands = facts.directives;
+  const bool guard = facts.whole_file_guard;
+  int depth = 0;
   // Recompute at the candidate start after determining the whole-file guard.
   depth = 0;
   for (const auto &command : commands) {
@@ -113,7 +152,7 @@ bool conditional_range(const std::string &text, unsigned begin, unsigned end) {
     const bool opens = kind == "if" || kind == "ifdef" || kind == "ifndef";
     const bool branch =
         opens || kind == "else" || kind == "elif" || kind == "endif";
-    if (branch && command.begin >= begin && command.begin < end)
+    if (!allow_internal && branch && command.begin >= begin && command.begin < end)
       return true;
     if (command.begin > begin)
       break;

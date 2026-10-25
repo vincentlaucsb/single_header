@@ -18,9 +18,15 @@
 using namespace clang;
 
 namespace single_header::stitching {
-std::string type_name(QualType type, ASTContext &ctx) {
+std::string type_name(QualType type, ASTContext &ctx, SemanticCache &cache) {
   if (type.isNull())
     return "<null>";
+  const auto key = type.getCanonicalType().getAsOpaquePtr();
+  const auto found = cache.types.find(key);
+  if (found != cache.types.end()) {
+    ++cache.type_hits;
+    return found->second;
+  }
   PrintingPolicy policy(ctx.getLangOpts());
   policy.FullyQualifiedName = true;
   auto result = type.getCanonicalType().getAsString(policy);
@@ -62,18 +68,20 @@ std::string type_name(QualType type, ASTContext &ctx) {
     }
   } enums(ctx, policy, result);
   enums.TraverseType(type.getCanonicalType());
+  cache.types.emplace(key, result);
   return result;
 }
 
 namespace {
 std::string mapped_identity(const Decl *, ASTContext &, IdentityIndex &,
-                            const std::string &);
+                            const std::string &, SemanticCache &);
 
 // Named external declarations use Clang USRs. Parameters and locals are
 // numbered within corresponding bodies, never compared by AST pointer address.
 struct Semantics : RecursiveASTVisitor<Semantics> {
   ASTContext &ctx;
   IdentityIndex *identities;
+  SemanticCache &cache;
   std::map<const Decl *, unsigned> locals;
   std::map<const CXXRecordDecl *, std::string> closures;
   std::vector<std::pair<std::string, std::string>> substitutions;
@@ -81,8 +89,11 @@ struct Semantics : RecursiveASTVisitor<Semantics> {
   std::string unsupported;
   bool internal_dependency = false;
   unsigned next_local = 0;
-  explicit Semantics(ASTContext &context, IdentityIndex *index = nullptr)
-      : ctx(context), identities(index) {}
+  Semantics(ASTContext &context, IdentityIndex *index, SemanticCache &memo)
+      : ctx(context), identities(index), cache(memo) {}
+  std::string type_name(QualType type, ASTContext &context) {
+    return stitching::type_name(type, context, cache);
+  }
 
   std::string normalized(std::string value) const {
     for (const auto &[from, to] : substitutions)
@@ -177,8 +188,16 @@ struct Semantics : RecursiveASTVisitor<Semantics> {
         return "local:" + std::to_string(number);
       }
       if (const auto *value = dyn_cast<ValueDecl>(decl)) {
-        if (value->getLinkageInternal() == Linkage::Internal ||
-            value->getLinkageInternal() == Linkage::UniqueExternal)
+        const auto *function = dyn_cast<FunctionDecl>(value);
+        // A specialization containing a local closure has unique-external
+        // linkage. Its primary and every structured argument are checked below;
+        // those identities still reject actual internal helpers or state.
+        const bool structured_specialization = function && function->getPrimaryTemplate() &&
+            function->getPrimaryTemplate()->getTemplatedDecl()->getLinkageInternal() == Linkage::External &&
+            function->getTemplateSpecializationArgs();
+        if (!structured_specialization &&
+            (value->getLinkageInternal() == Linkage::Internal ||
+             value->getLinkageInternal() == Linkage::UniqueExternal))
           internal_dependency = true;
       }
     }
@@ -204,7 +223,7 @@ struct Semantics : RecursiveASTVisitor<Semantics> {
       return "?";
     }
     const auto stable = normalized(usr.str().str());
-    return identities ? mapped_identity(decl, ctx, *identities, stable)
+    return identities ? mapped_identity(decl, ctx, *identities, stable, cache)
                       : stable;
   }
 
@@ -245,7 +264,7 @@ struct Semantics : RecursiveASTVisitor<Semantics> {
             semantic.substitutions.emplace_back(identity.substr(2), stable);
         }
         semantic.substitutions.emplace_back(
-            type_name(semantic.ctx.getRecordType(record), semantic.ctx),
+            semantic.type_name(semantic.ctx.getRecordType(record), semantic.ctx),
             stable);
         return true;
       }
@@ -286,6 +305,8 @@ struct Semantics : RecursiveASTVisitor<Semantics> {
     switch (stmt->getStmtClass()) {
 #define SH_NODE(name) case Stmt::name##Class:
       SH_NODE(CompoundStmt)
+      SH_NODE(CXXNewExpr) SH_NODE(CXXDeleteExpr) SH_NODE(LambdaExpr)
+      SH_NODE(CXXRewrittenBinaryOperator)
       SH_NODE(DeclStmt)
       SH_NODE(ReturnStmt)
       SH_NODE(IfStmt)
@@ -363,6 +384,47 @@ struct Semantics : RecursiveASTVisitor<Semantics> {
     }
     if (const auto *temporary = dyn_cast<CXXBindTemporaryExpr>(stmt))
       item(identity(temporary->getTemporary()->getDestructor()));
+    if (const auto *allocation = dyn_cast<CXXNewExpr>(stmt)) {
+      item(identity(allocation->getOperatorNew()));
+      item(allocation->getOperatorDelete()
+               ? identity(allocation->getOperatorDelete()) : "no-cleanup-delete");
+      item(type_name(allocation->getAllocatedType(), ctx));
+      item(allocation->isArray() ? "array-new" : "scalar-new");
+      item(allocation->isGlobalNew() ? "global-new" : "lookup-new");
+      item(std::to_string(static_cast<unsigned>(allocation->getInitializationStyle())));
+      item(std::to_string(allocation->getNumPlacementArgs()));
+    }
+    if (const auto *deletion = dyn_cast<CXXDeleteExpr>(stmt)) {
+      item(identity(deletion->getOperatorDelete()));
+      item(deletion->isArrayForm() ? "array-delete" : "scalar-delete");
+      item(deletion->isGlobalDelete() ? "global-delete" : "lookup-delete");
+      const auto destroyed = deletion->getDestroyedType();
+      item(type_name(destroyed, ctx));
+      if (destroyed.isNull())
+        unsupported = "unknown_delete_type";
+      else if (const auto *record = destroyed->getAsCXXRecordDecl())
+        if (const auto *destructor = record->getDestructor())
+          item(identity(destructor));
+    }
+    if (const auto *rewritten = dyn_cast<CXXRewrittenBinaryOperator>(stmt)) {
+      item(rewritten->getOpcodeStr().str());
+      item(rewritten->isReversed() ? "reversed" : "forward");
+      // RecursiveASTVisitor visits the complete resolved semantic form, including
+      // selected comparison functions and conversions.
+    }
+    if (const auto *lambda = dyn_cast<LambdaExpr>(stmt)) {
+      item(identity(lambda->getLambdaClass()));
+      item(std::to_string(lambda->getCaptureDefault()));
+      item(type_name(lambda->getCallOperator()->getType(), ctx));
+      if (lambda->isGenericLambda())
+        unsupported = "generic_lambda";
+      for (const auto &capture : lambda->captures()) {
+        item(std::to_string(capture.getCaptureKind()));
+        item(capture.isPackExpansion() ? "capture-pack" : "capture-single");
+        if (capture.capturesVariable())
+          item(identity(capture.getCapturedVar()));
+      }
+    }
     if (const auto *cast = dyn_cast<CastExpr>(stmt))
       item(cast->getCastKindName());
     if (const auto *unary = dyn_cast<UnaryOperator>(stmt))
@@ -411,7 +473,8 @@ struct Semantics : RecursiveASTVisitor<Semantics> {
   }
 };
 std::string mapped_identity(const Decl *decl, ASTContext &ctx,
-                            IdentityIndex &index, const std::string &usr) {
+                            IdentityIndex &index, const std::string &usr,
+                            SemanticCache &cache) {
   const auto *value = dyn_cast<ValueDecl>(decl);
   if (!value || (value->getLinkageInternal() != Linkage::Internal &&
                  value->getLinkageInternal() != Linkage::UniqueExternal))
@@ -429,7 +492,7 @@ std::string mapped_identity(const Decl *decl, ASTContext &ctx,
           .str();
   std::string signature = std::string(decl->getDeclKindName()) + ':' +
                           value->getQualifiedNameAsString() + ':' +
-                          type_name(value->getType(), ctx) + ':';
+                          type_name(value->getType(), ctx, cache) + ':';
   for (const auto &token : raw_tokens(text))
     signature += std::to_string(token.text.size()) + ':' + token.text;
   if (range.file != index.artifact) {
@@ -447,40 +510,68 @@ std::string mapped_identity(const Decl *decl, ASTContext &ctx,
 } // namespace
 
 std::string declaration_identity(const Decl *decl, ASTContext &ctx,
-                                  IdentityIndex &identities) {
-  Semantics semantic(ctx, &identities);
+                                  IdentityIndex &identities, SemanticCache &cache) {
+  Semantics semantic(ctx, &identities, cache);
   return semantic.identity(decl);
 }
 std::string function_type(FunctionDecl *fn, ASTContext &ctx,
-                           IdentityIndex &identities) {
-  Semantics semantic(ctx, &identities);
+                           IdentityIndex &identities, SemanticCache &cache) {
+  Semantics semantic(ctx, &identities, cache);
   semantic.initialize(fn);
-  return semantic.normalized(type_name(fn->getType(), ctx));
+  return semantic.normalized(type_name(fn->getType(), ctx, cache));
 }
 Record function_semantics(FunctionDecl *fn, ASTContext &ctx,
-                           IdentityIndex &identities) {
-  Semantics semantic(ctx, &identities);
+                           IdentityIndex &identities, SemanticCache &cache) {
+  Semantics semantic(ctx, &identities, cache);
   semantic.initialize(fn);
+  if (const auto *constructor = dyn_cast<CXXConstructorDecl>(fn)) {
+    // Includes implicit/default member and base initializers in semantic order.
+    for (const auto *init : constructor->inits()) {
+      semantic.item("constructor-initializer");
+      if (init->isMemberInitializer())
+        semantic.item(semantic.identity(init->getMember()));
+      else if (init->isBaseInitializer())
+        semantic.item(type_name(QualType(init->getBaseClass(), 0), ctx, cache));
+      else
+        semantic.item("delegating-initializer");
+      semantic.TraverseStmt(init->getInit());
+    }
+  }
+  if (const auto *destructor = dyn_cast<CXXDestructorDecl>(fn)) {
+    const auto *record = destructor->getParent();
+    for (const auto &base : record->bases()) {
+      semantic.item(type_name(base.getType(), ctx, cache));
+      if (const auto *owner = base.getType()->getAsCXXRecordDecl())
+        if (const auto *destroy = owner->getDestructor())
+          semantic.item(semantic.identity(destroy));
+    }
+    for (const auto *field : record->fields()) {
+      semantic.item(semantic.identity(field));
+      if (const auto *owner = ctx.getBaseElementType(field->getType())->getAsCXXRecordDecl())
+        if (const auto *destroy = owner->getDestructor())
+          semantic.item(semantic.identity(destroy));
+    }
+  }
   semantic.TraverseStmt(fn->getBody());
   return {semantic.out.str(), {}, semantic.unsupported,
           semantic.internal_dependency};
 }
 std::string variable_initializer(VarDecl *variable, ASTContext &ctx,
-                                  IdentityIndex &identities) {
-  Semantics semantic(ctx, &identities);
-  semantic.item(type_name(variable->getType(), ctx));
+                                  IdentityIndex &identities, SemanticCache &cache) {
+  Semantics semantic(ctx, &identities, cache);
+  semantic.item(type_name(variable->getType(), ctx, cache));
   semantic.TraverseStmt(variable->getInit());
   return semantic.out.str();
 }
 std::string field_initializer(FieldDecl *field, ASTContext &ctx,
-                               IdentityIndex &identities) {
-  Semantics semantic(ctx, &identities);
+                               IdentityIndex &identities, SemanticCache &cache) {
+  Semantics semantic(ctx, &identities, cache);
   semantic.TraverseStmt(field->getInClassInitializer());
   return semantic.out.str();
 }
 std::string default_argument(FunctionDecl *fn, unsigned parameter,
-                              ASTContext &ctx, IdentityIndex &identities) {
-  Semantics semantic(ctx, &identities);
+                              ASTContext &ctx, IdentityIndex &identities, SemanticCache &cache) {
+  Semantics semantic(ctx, &identities, cache);
   semantic.initialize(fn);
   semantic.TraverseStmt(fn->getParamDecl(parameter)->getDefaultArg());
   return semantic.out.str();

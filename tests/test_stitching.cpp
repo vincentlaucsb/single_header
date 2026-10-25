@@ -187,14 +187,14 @@ template<class T> T generic(T value) { return value; }
   const auto data = fixture.generate();
   CHECK(fixture.reason(data, "needs_source") == "destination_parse_error");
   CHECK(fixture.reason(data, "configured") == "conditional_region");
-  CHECK(fixture.reason(data, "conditional_body") == "conditional_region");
-  CHECK(fixture.reason(data, "macro_body") == "body_macro");
+  CHECK(fixture.reason(data, "conditional_body") == "accepted");
+  CHECK(fixture.reason(data, "macro_body") == "destination_parse_error");
   CHECK(fixture.reason(data, "Box::virtual_method") == "virtual_method");
   CHECK(fixture.reason(data, "generic") == "template");
-  CHECK(data.at("counts").at("removedBodies") == 0);
+  CHECK(data.at("counts").at("removedBodies") == 1);
   const auto stitched = read_text(fixture.output);
   run_command(fixture.command("off"));
-  CHECK(read_text(fixture.output) == stitched);
+  CHECK(read_text(fixture.output) != stitched);
 }
 
 TEST_CASE("physical lexer distinguishes guards from feature regions and fake "
@@ -475,7 +475,7 @@ TEST_CASE("residual lambdas retain identity without preventing ordinary "
       "--inline-annotation CSV_INLINE --rewrite-macro CSV_INLINE=inline");
   CHECK(data.at("baseline") == "valid");
   CHECK(fixture.reason(data, "safe") == "accepted");
-  CHECK(fixture.reason(data, "residual").find("unsupported_ast:") == 0);
+  CHECK(fixture.reason(data, "residual") == "accepted");
 }
 
 TEST_CASE("structured template arguments preserve closure identity in method "
@@ -512,9 +512,7 @@ int safe() { return 42; }
       "--inline-annotation CSV_INLINE --rewrite-macro CSV_INLINE=inline");
   CHECK(data.at("baseline") == "valid");
   CHECK(fixture.reason(data, "demo::safe") == "accepted");
-  CHECK(
-      fixture.reason(data, "demo::Names::set_names").find("unsupported_ast:") ==
-      0);
+  CHECK(fixture.reason(data, "demo::Names::set_names") == "accepted");
 }
 
 TEST_CASE("anonymous enums use declaration identity rather than printed source "
@@ -586,7 +584,7 @@ TEST_CASE("local closure members retain their lexical identity before "
       "--inline-annotation CSV_INLINE --rewrite-macro CSV_INLINE=inline");
   CHECK(data.at("baseline") == "valid");
   CHECK(fixture.reason(data, "safe") == "accepted");
-  CHECK(fixture.reason(data, "residual").find("unsupported_ast:") == 0);
+  CHECK(fixture.reason(data, "residual") == "accepted");
 }
 
 TEST_CASE("source-only attribute differences are informational while safe "
@@ -708,4 +706,173 @@ TEST_CASE(
   const auto original = read_text(fixture.output);
   run_command(fixture.command("off"));
   CHECK(read_text(fixture.output) == original);
+}
+
+TEST_CASE("batch validation retains constructor initializer and allocation bindings",
+          "[stitching][expanded]") {
+  StitchFixture fixture("expanded_bindings");
+  fixture.files(R"(#pragma once
+#include <cstddef>
+#include <new>
+int pick(long);
+struct Box { Box(); int n; };
+int pick(int);
+void *operator new(std::size_t, long);
+int allocate();
+void *operator new(std::size_t, int);
+int choose(long);
+int lambda_call(int);
+int choose(int);
+int safe();
+)", R"(Box::Box() : n(pick(0)) {}
+int allocate() { int *p = new(1) int(7); return *p; }
+int lambda_call(int input) { auto call = [input]() { return choose(input); }; return call(); }
+int safe() { return 7; }
+)");
+  const auto data = fixture.generate();
+  CHECK(fixture.reason(data, "Box::Box").find("changed_semantics:") == 0);
+  CHECK(fixture.reason(data, "allocate").find("changed_semantics:") == 0);
+  CHECK(fixture.reason(data, "lambda_call").find("changed_semantics:") == 0);
+  CHECK(fixture.reason(data, "safe") == "accepted");
+  CHECK(data.at("work").at("typeCacheHits").get<unsigned>() > 0);
+  CHECK(data.at("work").at("finalParses") == 1);
+}
+
+TEST_CASE("constructors operators captures new and delete stitch with runtime checks",
+          "[stitching][expanded][runtime]") {
+  StitchFixture fixture("expanded_runtime");
+  fixture.files(R"(#pragma once
+struct Base { int base; int *count; Base(int, int *); ~Base(); };
+struct Box : Base {
+  int value; int *count;
+  Box(int, int *); ~Box();
+  Box &operator+=(int); explicit operator int() const;
+};
+int exercise();
+)", R"(Base::Base(int input, int *out) : base(input + 1), count(out) {}
+Base::~Base() { *count = *count * 10 + 1; }
+Box::Box(int input, int *out) : Base(input, out), value(input * 2), count(out) {}
+Box::~Box() { *count = *count * 10 + 2; }
+Box &Box::operator+=(int input) { value += input; return *this; }
+Box::operator int() const { return base + value; }
+int exercise() {
+  int destroyed = 0;
+  int result = 0;
+  { Box box(3, &destroyed); box += 2;
+    auto value = [&, bonus = 1]() { return static_cast<int>(box) + bonus; };
+    int *copy = new int(value()); result = *copy; delete copy;
+  }
+  return result + destroyed;
+}
+)");
+  const auto data = fixture.generate();
+  for (const auto &candidate : data.at("candidates"))
+    CHECK(candidate.at("reason") == "accepted");
+  CHECK(data.at("work").at("trialParses") == 1);
+  CHECK(data.at("work").at("finalParses") == 1);
+  fixture.runtime("int one() { return exercise(); }\n",
+                  "int two() { return exercise(); }\n",
+                  "int one(); int two(); int main() { return one() == 34 && two() == 34 ? 0 : 1; }\n");
+}
+
+TEST_CASE("preserved body branches object macros and inherited nodiscard are supported",
+          "[stitching][expanded][preprocessor]") {
+  StitchFixture fixture("expanded_preprocessor");
+  fixture.files("#pragma once\n#define VALUE 7\n[[nodiscard]] int value();\n",
+                "int value() {\n#if MODE\nreturn VALUE;\n#else\nreturn VALUE + 1;\n#endif\n}\n");
+  const auto data = fixture.generate("all", "--frontend-arg -DMODE=1");
+  CHECK(fixture.reason(data, "value") == "accepted");
+  const auto text = read_text(fixture.output);
+  CHECK(text.find("#if MODE") != std::string::npos);
+  CHECK(text.find("return VALUE + 1;") != std::string::npos);
+}
+
+TEST_CASE("rewritten comparisons reject a different selected equality function",
+          "[stitching][expanded][lookup]") {
+  StitchFixture fixture("rewritten_comparison");
+  fixture.files("#pragma once\nstruct L {}; struct R {};\n"
+                "bool operator==(L, R);\nint run();\nbool operator==(R, L);\n",
+                "int run() { return R{} != L{}; }\n");
+  const auto data = fixture.generate("all", "--frontend-arg -std=c++20");
+  CHECK(fixture.reason(data, "run").find("changed_semantics:") == 0);
+}
+
+TEST_CASE("matching feature branches retain their guards while mismatches stay put",
+          "[stitching][expanded][preprocessor]") {
+  StitchFixture fixture("matching_guards");
+  fixture.files("#ifndef API_HPP\n#define API_HPP\n#if FEATURE\nint yes();\n#else\nint no();\n#endif\n"
+                "#if FEATURE\nint mismatch();\n#endif\n#endif\n",
+                "#if FEATURE\nint yes() { return 1; }\n#else\nint no() { return 2; }\n#endif\n"
+                "#if FEATURE == 1\nint mismatch() { return 3; }\n#endif\n");
+  auto data = fixture.generate("all", "--frontend-arg -DFEATURE=1");
+  CHECK(fixture.reason(data, "yes") == "accepted");
+  CHECK(fixture.reason(data, "mismatch") == "conditional_region");
+  CHECK(read_text(fixture.output).find("#if FEATURE") != std::string::npos);
+  data = fixture.generate("all", "--frontend-arg -DFEATURE=0");
+  CHECK(fixture.reason(data, "no") == "accepted");
+  CHECK(read_text(fixture.output).find("#else") != std::string::npos);
+}
+
+TEST_CASE("unsupported alternate-context bodies and internal templates remain deferred",
+          "[stitching][expanded][contexts]") {
+  StitchFixture fixture("alternate_unsupported");
+  fixture.files("#pragma once\nint run();\nint safe();\nint hidden();\n",
+                "int run() {\n#if GENERIC\nauto call = [](auto x) { return x; }; return call(1);\n"
+                "#else\nreturn 1;\n#endif\n}\n"
+                "namespace { template<class T> int helper(T x) { return x; } }\n"
+                "int hidden() { return helper(2); }\n");
+  write_text(fixture.include / "safe.cpp", "#include \"api.hpp\"\nint safe() { return 7; }\n");
+  const auto database = fixture.work / "compile_commands.json";
+  nlohmann::json commands = nlohmann::json::array();
+  for (const auto &file : {"api.cpp", "safe.cpp"})
+    commands.push_back({{"directory", fixture.work.generic_string()},
+                        {"file", std::string("include/") + file},
+                        {"arguments", {"clang++", "-std=c++17",
+                                       file == std::string("api.cpp") ? "-DGENERIC=0" : "-DGENERIC=1",
+                                       "-c", std::string("include/") + file}}});
+  write_text(database, commands.dump());
+  auto command = fixture.command("all", "--compilation-database " + quote(database));
+  const std::string explicit_context = " --frontend-arg -std=c++17";
+  command.erase(command.find(explicit_context), explicit_context.size());
+  run_command(command);
+  const auto data = nlohmann::json::parse(read_text(fixture.report));
+  CHECK(data.at("baseline") == "valid");
+  CHECK(fixture.reason(data, "run") != "accepted");
+  CHECK(fixture.reason(data, "hidden") == "internal_dependency");
+  CHECK(fixture.reason(data, "safe") == "accepted");
+  CHECK(data.at("work").at("finalParses") == 2);
+  CHECK(data.at("counts").at("removedBodies") == 1);
+}
+
+TEST_CASE("guided partition reuses an identical failed edit set after reordering",
+          "[stitching][expanded][performance]") {
+  StitchFixture fixture("guided_partition");
+  std::string header = "#pragma once\nint bad();\n";
+  std::string source = "int helper() { return 1; }\nint bad() { return helper(); }\n";
+  for (int i = 0; i < 8; ++i) {
+    const auto name = "good" + std::to_string(i);
+    header += "int " + name + "();\n";
+    source += "int " + name + "() { return " + std::to_string(i) + "; }\n";
+  }
+  fixture.files(header, source);
+  const auto data = fixture.generate();
+  CHECK(fixture.reason(data, "bad") == "destination_parse_error");
+  CHECK(data.at("counts").at("removedBodies") == 8);
+  CHECK(data.at("work").at("guidedPartitions") == 1);
+  CHECK(data.at("work").at("trialParses") == 2);
+  CHECK(data.at("work").at("trialCacheHits") == 1);
+  CHECK(data.at("work").at("finalParses") == 1);
+}
+
+TEST_CASE("defaulted constructors and global allocation replacements stay deferred",
+          "[stitching][expanded]") {
+  StitchFixture fixture("special_function_boundaries");
+  fixture.files("#pragma once\n#include <cstddef>\nstruct Box { Box(); };\n"
+                "void *operator new(std::size_t);\nint safe();\n",
+                "Box::Box() = default;\nvoid *operator new(std::size_t) { throw 1; }\n"
+                "int safe() { return 7; }\n");
+  const auto data = fixture.generate();
+  CHECK(fixture.reason(data, "Box::Box") == "defaulted_or_deleted_function");
+  CHECK(fixture.reason(data, "operator new") == "global_allocation_replacement");
+  CHECK(fixture.reason(data, "safe") == "accepted");
 }

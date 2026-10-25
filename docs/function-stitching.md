@@ -76,10 +76,14 @@ built enabled CLI; standard downloaded release binaries do not include Clang.
 ## Supported transformation
 
 Candidates are ordinary non-template external free functions and ordinary/static
-methods of non-template classes. Useful supported bodies include local variables,
+methods, nonvirtual constructors/destructors, operators and conversions of
+non-template classes. Useful supported bodies include local variables,
 branches and loops, references and aliases, direct/member/operator calls, string
 and vector construction/assignment, RAII temporaries and destruction, casts,
-`sizeof`, `noexcept`, recursion, and shared function-local static state. Header
+`sizeof`, `noexcept`, recursion, non-generic lambdas with captures, new/delete,
+rewritten comparisons, and shared function-local static state. Constructor
+initializer lists move with the body; explicit and implicit initializer semantics
+and implicit destruction dependencies are recorded. Header
 declarations keep their defaults, suffix qualifiers, access position and comments;
 AST token ranges supply definition parameter names. Simple unnamed declaration
 parameters are supported. Repeated declarations remain, with the last available
@@ -94,9 +98,12 @@ marker insertion. A failed relocation retains both original pieces. Source-only
 dependencies are observed, never hoisted or repaired.
 
 Canonical whole-file `#ifndef`/`#define` guards and `#pragma once` are retained.
-Feature-condition candidates, including conditionals anywhere inside a body, are
-skipped. Clang's raw lexer distinguishes directives from raw strings and comments.
-Other directives and `_Pragma`/`__pragma` anywhere inside a source definition are
+Feature-conditional definitions can move when the declaration and definition have
+identical outer branch stacks, including each preceding `else`/`elif` branch.
+Canonical whole-file guards are excluded from that comparison. Body-contained
+conditional branches move intact, including inactive source text. Clang's raw
+lexer distinguishes directives from raw strings and comments. State-changing
+directives and `_Pragma`/`__pragma` anywhere inside a source definition are
 also skipped, preventing moved macro state from activating untouched header branches.
 Diagnostic and region pragmas are allowed; other physical pragmas or `#line`
 directives conservatively disable relocation for the scanned set.
@@ -105,14 +112,18 @@ Signature macros are skipped. To explicitly allow an object macro whose expansio
 is empty or exactly `inline`, use `--inline-annotation CSV_INLINE` (repeatable).
 Its full source spelling is removed with the definition, including an empty prefix
 that is absent from the AST range. Rewrites for configured annotations must also
-be empty or `inline`. Macro-generated declarations and body macros remain skips.
+be empty or `inline`. Simple object body macros are supported when expanded-token
+and semantic records remain equal. Function-like body macros, pragma-producing
+macros and macro-generated declarations remain deferred.
 
-Deferred candidates include templates and class-template methods, special members,
-operators and conversion functions, virtual methods, constexpr/consteval functions,
-C linkage, variadics, attributes, indirect calls, lambdas, new/delete, dependent
+Deferred candidates include templates and class-template methods, constructor
+function-try-blocks, defaulted/deleted definitions, global allocation/deallocation
+replacements, virtual methods, constexpr/consteval functions,
+C linkage, variadics, most attributes, indirect calls, generic lambdas, dependent
 expressions, unsupported AST nodes, and internal-linkage dependencies. Dependencies
 on ordinary library constructors/operators/templates are analyzed by Clang and
-are distinct from relocating their definitions.
+are distinct from relocating their definitions. Inherited `nodiscard` is retained
+from the header declaration; source-only attributes still reject relocation.
 
 ## Validation boundary and diagnostics
 
@@ -149,14 +160,18 @@ without discarding overload or argument identity. Anonymous enum types use their
 source-independent compiler declaration USRs when available; location-based or
 ambiguous identities remain a conservative limitation.
 
-Unstitched generated bodies and declaration records are compared after each
-accepted edit, including residual code, and the final accepted batch is checked
+Unstitched generated bodies and declaration records are compared for each trial
+batch, including residual code, and the final accepted batch is freshly checked
 again. Comparison checks both directions: added and missing recorded definitions
 or declarations also reject relocation.
 Unknown constructs prevent candidate acceptance. Delayed, uninstantiated template
 bodies do not supply a semantic record and remain outside the transformation
 guarantee. This is a bounded source-relocation check for its declared vocabulary,
 not a proof of arbitrary C++ equivalence or future template instantiations.
+Each moved function must stay within the supported vocabulary and internal-linkage
+policy in every supplied generated baseline and trial context, including alternate
+active body branches. Unsupported unchanged residual bodies do not veto neighboring
+edits.
 
 Original-to-unstitched differences are reported separately in `baselineDifferences`
 as informational diagnostics. They describe preexisting collation behavior and
@@ -179,13 +194,26 @@ database and output, including existing filesystem aliases. Remaining definition
 and source globals can still require a one-TU implementation section. Stitching does
 not promise faster code, stable binary ABI, or a wholly header-only result.
 
-Candidates are tested deterministically in identity order. Every accepted prefix
-is revalidated before another candidate is added. Rejected candidates stay in the
-legacy source section. This is deliberately conservative and order dependent; it
-does not search all alternative placements or repair inseparable groups. Cost is
-approximately one full frontend pass per candidate per source context, plus original,
-baseline and final passes. Run large analyses with an external process deadline;
-in-process frontend cancellation is not implemented.
+Eligible candidates are sorted by identity and tested together. A failing batch
+first uses exact diagnostic locations or changed-record identities to partition
+suspected edits. Unattributed failures split deterministically in halves; each
+partition is checked with the previously
+accepted edits against the unchanged generated baseline. Rejected singletons stay
+in the legacy source section. A successful batch needs one frontend pass per source
+context; failures incur subdivision passes. All supplied contexts are retained,
+including filename-sensitive contexts. The exact final artifact is parsed again
+under every context, bypassing the trial cache.
+
+Shared sources of truth are scoped to one run: frozen source bytes and provenance,
+one physical token/directive index per file, and validation results keyed by the
+complete canonical edit set. Each frontend parse owns its FileID identity cache,
+canonical type spelling cache, and per-file preprocessing event indexes. Offset
+queries restore preprocessing encounter order, including repeated inclusions.
+AST pointer keys never survive their owning parse. Changed source bytes abort
+emission; no mutable cache is shared across invocations. `work` records actual
+parse counts and cache activity; `phaseMilliseconds` separates discovery, baseline,
+trials and fresh final validation. Run large analyses with an external process
+deadline; in-process frontend cancellation is not implemented.
 
 ## Tests and local validation
 
@@ -229,6 +257,22 @@ which supplied the analysis inputs. The original library and generated artifact
 were compiled and linked locally with MSVC 19.51 and Clang 20.1.8. Two-TU consumers
 also parsed 500,000 rows through both mmap and stream paths, including distinct
 quoted fields and embedded newlines (46,619,067 bytes).
+
+With the expanded support and shared indexes, the nine-context run relocated
+69 of 91 definitions (one free function and 68 methods), reducing the generated
+header from 680,603 to 675,072 bytes (5,531 bytes saved). Analysis took 62,734 ms
+(63,386 ms external wall time), compared with 1,791,489 ms for the earlier
+30-definition sequential run on the same corpus and contexts: approximately
+28.6 times faster. These are local measurements, not general performance claims.
+The final run made nine discovery parses, nine baseline parses, ten trial parses
+and nine fresh final parses. One diagnostic-guided partition isolated a relocation
+that needed a source-only helper; canonical edit-set caching reused its failed
+batch result. The report recorded 1,014,596 canonical-type cache hits.
+
+MSVC and Clang consumers also passed the upstream 56-case suite (87,097
+assertions), the 500,000-row dual-path runtime check, and exception-enabled and
+compiler-disabled-exception smoke tests on the expanded artifact. The remaining
+skips retain their source implementations and explicit reasons in the report.
 
 The original-to-unstitched report identifies a preexisting collation difference:
 the `CSV_NON_NULL(2)`
