@@ -154,3 +154,85 @@ TEST_CASE("stitching rejects invalid modes and unavailable compilation contexts"
   CHECK(unavailable.error.find("SINGLE_HEADER_WITH_CLANG=ON") != std::string::npos);
 #endif
 }
+
+TEST_CASE("include hoisting CLI and JSON options override independently", "[config][includes]") {
+  const auto work = output_dir() / "include_options";
+  const auto include = work / "include";
+  const auto output = work / "result.hpp";
+  const auto config = work / "config.json";
+  write_text(include / "api.hpp", "#ifndef CONFIG_GUARD\n#define CONFIG_GUARD\n"
+      "int value;\n#include <vector>\n#include <vector>\n#endif\n");
+  auto settings = nlohmann::json{{"includeRoots", {include.generic_string()}},
+      {"output", output.generic_string()}, {"deduplicateIncludes", true}, {"includeGuard", "CONFIG_GUARD"}};
+  write_text(config, settings.dump());
+  const auto command = quote(tool_path()) + " --config " + quote(config);
+  run_command(command);
+  CHECK(read_text(output) == "#pragma once\n#ifndef CONFIG_GUARD\n#define CONFIG_GUARD\n"
+      "#include <vector>\nint value;\n#endif\n");
+  run_command(command + " --no-deduplicate-includes --include-guard IGNORED");
+  CHECK(read_text(output).find("int value;\n#include <vector>\n#include <vector>\n") != std::string::npos);
+  settings["deduplicateIncludes"] = false;
+  settings["includeGuard"] = "WRONG_GUARD";
+  write_text(config, settings.dump());
+  run_command(command + " --deduplicate-includes --include-guard CONFIG_GUARD");
+  CHECK(read_text(output).find("#define CONFIG_GUARD\n#include <vector>\nint value;") != std::string::npos);
+  auto wrong_guard = run_result(command + " --deduplicate-includes");
+  CHECK(wrong_guard.status != 0);
+  CHECK(wrong_guard.error.find("configured outer guard WRONG_GUARD") != std::string::npos);
+  settings["deduplicateIncludes"] = "true";
+  write_text(config, settings.dump());
+  auto invalid_boolean = run_result(command);
+  CHECK(invalid_boolean.status != 0);
+  CHECK(invalid_boolean.error.find("must be a boolean") != std::string::npos);
+  settings["deduplicateIncludes"] = true;
+  settings.erase("includeGuard");
+  write_text(config, settings.dump());
+  auto missing_guard = run_result(command);
+  CHECK(missing_guard.status != 0);
+  CHECK(missing_guard.error.find("--include-guard") != std::string::npos);
+}
+
+TEST_CASE("mixed-include waivers override JSON and audit failures preserve existing artifacts", "[config][includes][audit]") {
+  const auto work = output_dir() / "mixed_include_options";
+  const auto include = work / "include";
+  const auto output = work / "result.hpp";
+  const auto report = work / "report.json";
+  const auto config = work / "config.json";
+  write_text(include / "api.hpp", "#ifndef MIXED_CONFIG_GUARD\n#define MIXED_CONFIG_GUARD\n"
+      "int value;\n#include <thread>\n#include <vector>\n#if FEATURE\n#include <thread>\n#include <vector>\n#endif\n#endif\n");
+  auto settings = nlohmann::json{{"includeRoots", {include.generic_string()}},
+      {"output", output.generic_string()}, {"stitchingReport", report.generic_string()},
+      {"deduplicateIncludes", true}, {"includeGuard", "MIXED_CONFIG_GUARD"}};
+  write_text(config, settings.dump());
+  write_text(output, "output sentinel");
+  write_text(report, "report sentinel");
+  const auto command = quote(tool_path()) + " --config " + quote(config);
+  const auto strict = run_result(command);
+  CHECK(strict.status != 0);
+  CHECK(strict.error.find("<thread>: unguarded") != std::string::npos);
+  CHECK(strict.error.find("<vector>: unguarded") != std::string::npos);
+  CHECK(read_text(output) == "output sentinel");
+  CHECK(read_text(report) == "report sentinel");
+  settings["allowMixedIncludes"] = {"<thread>", "<vector>"};
+  write_text(config, settings.dump());
+  run_command(command);
+  const auto hoisted = read_text(output);
+  CHECK(hoisted == "#pragma once\n#ifndef MIXED_CONFIG_GUARD\n#define MIXED_CONFIG_GUARD\n"
+      "#include <thread>\n#include <vector>\nint value;\n#if FEATURE\n#endif\n#endif\n");
+  const auto overridden = run_result(command + " --allow-mixed-include " + quote_value("<thread>"));
+  CHECK(overridden.status != 0);
+  CHECK(overridden.error.find("<vector>: unguarded") != std::string::npos);
+  CHECK(overridden.error.find("<thread>: unguarded") == std::string::npos);
+  CHECK(read_text(output) == hoisted);
+  run_command(command + " --allow-mixed-include " + quote_value("<thread>") +
+      " --allow-mixed-include " + quote_value("<vector>"));
+  CHECK(read_text(output) == hoisted);
+  run_command(command + " --no-deduplicate-includes --allow-mixed-include " + quote_value("<unrelated>"));
+  CHECK(read_text(output).find("#if FEATURE\n#include <thread>\n#include <vector>") != std::string::npos);
+  settings["allowMixedIncludes"] = {42};
+  write_text(config, settings.dump());
+  const auto invalid = run_result(command);
+  CHECK(invalid.status != 0);
+  CHECK(invalid.error.find("allowMixedIncludes") != std::string::npos);
+  CHECK(invalid.error.find("array of strings") != std::string::npos);
+}

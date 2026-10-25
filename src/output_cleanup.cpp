@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <cctype>
+#include <map>
 #include <set>
+#include <sstream>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -148,29 +151,274 @@ void clean_documentation(std::string_view source, std::size_t begin, std::size_t
   }
 }
 
-bool standard_header(const std::string &name) {
-  // cassert/assert.h deliberately support reinclusion after NDEBUG changes.
-  static const std::set<std::string> headers = {
-      "algorithm", "any", "array", "atomic", "barrier", "bit", "bitset",
-      "cctype", "cerrno", "cfenv", "cfloat", "charconv", "chrono", "cinttypes",
-      "climits", "clocale", "cmath", "codecvt", "compare", "complex", "concepts",
-      "condition_variable", "coroutine", "csetjmp", "csignal", "cstdarg", "cstddef",
-      "cstdint", "cstdio", "cstdlib", "cstring", "ctime", "cuchar", "cwchar", "cwctype",
-      "deque", "exception", "execution", "expected", "filesystem", "flat_map", "flat_set",
-      "format", "forward_list", "fstream", "functional", "future", "generator",
-      "initializer_list", "iomanip", "ios", "iosfwd", "iostream", "istream", "iterator",
-      "latch", "limits", "list", "locale", "map", "mdspan", "memory", "memory_resource",
-      "mutex", "new", "numbers", "numeric", "optional", "ostream", "print", "queue",
-      "random", "ranges", "ratio", "regex", "scoped_allocator", "semaphore", "set",
-      "shared_mutex", "source_location", "span", "spanstream", "sstream", "stack",
-      "stacktrace", "stdexcept", "stop_token", "streambuf", "string", "string_view",
-      "strstream", "syncstream", "system_error", "thread", "tuple", "type_traits",
-      "typeindex", "typeinfo", "unordered_map", "unordered_set", "utility", "valarray",
-      "variant", "vector", "version", "ctype.h", "errno.h", "fenv.h", "float.h",
-      "inttypes.h", "limits.h", "locale.h", "math.h", "setjmp.h", "signal.h",
-      "stdarg.h", "stddef.h", "stdint.h", "stdio.h", "stdlib.h", "string.h",
-      "time.h", "uchar.h", "wchar.h", "wctype.h"};
-  return headers.count(name) != 0;
+struct Directive {
+  std::size_t begin, end, line, code_epoch, line_number;
+  std::string word, argument, header;
+  std::vector<Range> comments;
+};
+
+std::size_t skip_directive_space(std::string_view text, std::size_t i) {
+  for (;;) {
+    while (i < text.size() && horizontal(text[i])) ++i;
+    if (text.substr(i, 2) != "/*") return i;
+    const auto close = text.find("*/", i + 2);
+    if (close == std::string_view::npos) return text.size();
+    i = close + 2;
+  }
+}
+std::string trim(std::string_view value) {
+  auto begin = value.find_first_not_of(" \t\r\n\f\v");
+  if (begin == std::string_view::npos) return {};
+  return std::string(value.substr(begin, value.find_last_not_of(" \t\r\n\f\v") - begin + 1));
+}
+
+// This is a preprocessing-token scan, after line splicing. It never discovers
+// directives inside comments, ordinary strings, raw strings, or other directives.
+std::vector<Directive> directives(std::string_view source) {
+  const LogicalSource view(source);
+  const auto &text = view.text;
+  std::vector<Directive> result;
+  bool line_start = true;
+  std::size_t code_epoch = 0;
+  std::size_t line_number = 1, line_cursor = 0;
+  for (std::size_t i = 0; i < text.size();) {
+    if (text[i] == '\n') { line_start = true; ++i; continue; }
+    if (horizontal(text[i])) { ++i; continue; }
+    if (text.compare(i, 2, "//") == 0 || text.compare(i, 2, "/*") == 0) {
+      const bool block = text[i + 1] == '*';
+      const auto close = text.find(block ? "*/" : "\n", i + 2);
+      const auto end = close == std::string::npos ? text.size() : close + (block ? 2 : 0);
+      if (text.find('\n', i) < end) line_start = true;
+      i = end; continue;
+    }
+    if (line_start && (text[i] == '#' || text.compare(i, 2, "%:") == 0)) {
+      const auto word_begin = skip_directive_space(text, i + (text[i] == '#' ? 1 : 2));
+      auto word_end = word_begin;
+      while (word_end < text.size() && identifier(text[word_end])) ++word_end;
+      const auto word = text.substr(word_begin, word_end - word_begin);
+      const auto operand = skip_directive_space(text, word_end);
+      auto header_end = operand;
+      if (word == "include" && operand < text.size() && (text[operand] == '<' || text[operand] == '"')) {
+        const auto close = text.find(text[operand] == '<' ? '>' : '"', operand + 1);
+        if (close != std::string::npos && text.find('\n', operand) > close) header_end = close + 1;
+      }
+      std::vector<Range> comments;
+      auto end = i + (text[i] == '#' ? 1 : 2);
+      for (; end < text.size() && text[end] != '\n';) {
+        if (end == operand && header_end > operand) { end = header_end; continue; }
+        if (text.compare(end, 2, "/*") == 0 || text.compare(end, 2, "//") == 0) {
+          const bool block = text[end + 1] == '*';
+          const auto close = text.find(block ? "*/" : "\n", end + 2);
+          const auto stop = close == std::string::npos ? text.size() : close + (block ? 2 : 0);
+          comments.push_back({end, stop});
+          end = stop;
+        } else {
+          const auto raw = raw_end(view, source, end);
+          if (raw != end) end = raw;
+          else if (text[end] == '"' || text[end] == '\'') end = quoted_end(text, end);
+          else if (std::isdigit(static_cast<unsigned char>(text[end]))) end = number_end(text, end);
+          else if (identifier(text[end])) {
+            while (end < text.size() && identifier(text[end])) ++end;
+          } else ++end;
+        }
+      }
+      // Comments are whitespace for guard parsing, but retained byte-for-byte
+      // when removing an include directive at its original position.
+      auto argument = text.substr(word_end, end - word_end);
+      for (const auto comment : comments) {
+        const auto begin = std::max(comment.begin, word_end);
+        if (begin < comment.end)
+          std::fill(argument.begin() + (begin - word_end), argument.begin() + (comment.end - word_end), ' ');
+      }
+      std::string header;
+      if (header_end > operand && trim(argument.substr(header_end - word_end)).empty())
+        header = text.substr(operand, header_end - operand);
+      auto line = view.physical[i];
+      while (line && source[line - 1] != '\n' && horizontal(source[line - 1])) --line;
+      if (line && source[line - 1] != '\n') line = view.physical[i];
+      line_number += static_cast<std::size_t>(std::count(source.begin() + line_cursor, source.begin() + view.physical[i], '\n'));
+      line_cursor = view.physical[i];
+      Directive directive{view.physical[i], view.physical[end] + (end < text.size() && text[end] == '\n'),
+                          line, code_epoch, line_number, word, trim(argument), header, {}};
+      for (const auto comment : comments)
+        directive.comments.push_back({view.physical[comment.begin], view.physical[comment.end]});
+      result.push_back(std::move(directive));
+      i = end; continue;
+    }
+    line_start = false;
+    ++code_epoch;
+    const auto raw = raw_end(view, source, i);
+    if (raw != i) i = raw;
+    else if (text[i] == '"' || text[i] == '\'') i = quoted_end(text, i);
+    else if (std::isdigit(static_cast<unsigned char>(text[i])) ||
+             (text[i] == '.' && i + 1 < text.size() && std::isdigit(static_cast<unsigned char>(text[i + 1]))))
+      i = number_end(text, i);
+    else if (identifier(text[i])) {
+      while (i < text.size() && identifier(text[i])) ++i;
+    } else ++i;
+  }
+  return result;
+}
+
+bool opens_guard(const Directive &directive, std::string_view guard) {
+  if (directive.word == "ifndef") return directive.argument == guard;
+  if (directive.word != "if") return false;
+  // Accept the two common forms without interpreting arbitrary expressions.
+  auto expression = std::string_view(directive.argument);
+  auto i = skip_directive_space(expression, 0);
+  if (i == expression.size() || expression[i++] != '!') return false;
+  i = skip_directive_space(expression, i);
+  if (expression.substr(i, 7) != "defined") return false;
+  i += 7;
+  if (i < expression.size() && identifier(expression[i])) return false;
+  i = skip_directive_space(expression, i);
+  const bool parenthesized = i < expression.size() && expression[i] == '(';
+  if (parenthesized) i = skip_directive_space(expression, i + 1);
+  const auto start = i;
+  while (i < expression.size() && identifier(expression[i])) ++i;
+  if (expression.substr(start, i - start) != guard) return false;
+  i = skip_directive_space(expression, i);
+  if (parenthesized) {
+    if (i == expression.size() || expression[i++] != ')') return false;
+    i = skip_directive_space(expression, i);
+  }
+  return i == expression.size();
+}
+
+std::string hoist_includes(std::string_view source, std::string_view guard,
+                           const std::vector<std::string> &allow_mixed_includes) {
+  const auto fail = [&](const std::string &reason) -> void {
+    throw std::runtime_error("include deduplication: " + reason);
+  };
+  if (guard.empty() || (!std::isalpha(static_cast<unsigned char>(guard.front())) && guard.front() != '_') ||
+      !std::all_of(guard.begin(), guard.end(), [](unsigned char c) { return std::isalnum(c) || c == '_'; }))
+    fail("--include-guard must name the outer header guard macro");
+  const auto items = directives(source);
+  const auto missing = items.size();
+  std::size_t opening = missing, definition = missing, closing = missing;
+  std::vector<std::size_t> stack, branches;
+  std::vector<bool> eligible(items.size());
+  struct Occurrence { std::size_t line; std::vector<std::size_t> guards; };
+  struct IncludeUses { std::vector<Occurrence> unguarded, guarded; };
+  std::map<std::string, IncludeUses> uses;
+  for (std::size_t i = 0; i < items.size(); ++i) {
+    const auto &item = items[i];
+    if (opens_guard(item, guard)) {
+      if (opening != missing || !stack.empty()) fail("configured guard " + std::string(guard) + " is ambiguous or not outermost");
+      opening = i;
+    }
+    eligible[i] = stack.empty() || (stack.size() == 1 && stack.front() == opening);
+    if (!item.header.empty()) {
+      Occurrence occurrence{item.line_number, {}};
+      for (std::size_t j = 0; j < stack.size(); ++j)
+        if (stack[j] != opening) occurrence.guards.push_back(branches[j]);
+      auto &use = uses[item.header];
+      (eligible[i] ? use.unguarded : use.guarded).push_back(std::move(occurrence));
+    }
+    if (item.word == "if" || item.word == "ifdef" || item.word == "ifndef") {
+      stack.push_back(i);
+      branches.push_back(i);
+    } else if (item.word == "else" || item.word == "elif" || item.word == "elifdef" || item.word == "elifndef") {
+      if (stack.empty()) fail("unmatched #" + item.word);
+      if (stack.back() == opening) fail("configured outer guard must not have #else or #elif branches");
+      branches.back() = i;
+    } else if (item.word == "endif") {
+      if (stack.empty()) fail("unmatched #endif");
+      if (stack.back() == opening) closing = i;
+      stack.pop_back();
+      branches.pop_back();
+    } else if (item.word == "define" || item.word == "undef") {
+      auto end = std::size_t{0};
+      while (end < item.argument.size() && identifier(item.argument[end])) ++end;
+      if (std::string_view(item.argument).substr(0, end) == guard) {
+        if (item.word != "define" || definition != missing || opening == missing ||
+            stack.size() != 1 || stack.front() != opening || i != opening + 1 ||
+            item.code_epoch != items[opening].code_epoch ||
+            (end < item.argument.size() && item.argument[end] == '('))
+          fail("configured guard " + std::string(guard) + " needs one opening #define immediately after its guard test");
+        definition = i;
+      }
+    }
+  }
+  if (!stack.empty()) fail("unterminated conditional directive");
+  if (opening == missing || definition == missing || closing == missing)
+    fail("configured outer guard " + std::string(guard) + " was not found with a matching #define and #endif");
+
+  std::set<std::string> allowed;
+  for (const auto &operand : allow_mixed_includes) {
+    if (operand.size() < 3 || (operand.front() != '<' && operand.front() != '"') ||
+        operand.back() != (operand.front() == '<' ? '>' : '"') ||
+        operand.find_first_of("\r\n") != std::string::npos ||
+        operand.find(operand.back(), 1) != operand.size() - 1)
+      fail("--allow-mixed-include expects one literal operand including delimiters, e.g. '<thread>'");
+    allowed.insert(operand);
+  }
+  std::ostringstream conflicts;
+  for (const auto &[header, use] : uses) {
+    if (use.unguarded.empty() || use.guarded.empty() || allowed.count(header)) continue;
+    conflicts << "\n  " << header << ": unguarded assembled lines ";
+    for (std::size_t i = 0; i < use.unguarded.size(); ++i) {
+      if (i) conflicts << ", ";
+      conflicts << use.unguarded[i].line;
+    }
+    conflicts << "; guarded assembled lines ";
+    for (std::size_t i = 0; i < use.guarded.size(); ++i) {
+      if (i) conflicts << ", ";
+      const auto &occurrence = use.guarded[i];
+      conflicts << occurrence.line << " [";
+      for (std::size_t j = 0; j < occurrence.guards.size(); ++j) {
+        if (j) conflicts << "; ";
+        const auto &condition = items[occurrence.guards[j]];
+        conflicts << '#' << condition.word;
+        if (!condition.argument.empty()) conflicts << ' ' << condition.argument;
+        conflicts << " (line " << condition.line_number << ')';
+      }
+      conflicts << ']';
+    }
+  }
+  if (!conflicts.str().empty())
+    fail("mixed guarded and unguarded literal includes:" + conflicts.str() +
+         "\nUse --allow-mixed-include for each reviewed operand to waive this audit only; those includes still hoist.");
+
+  std::set<std::string> included;
+  std::string block;
+  const auto newline = source.find("\r\n") == std::string_view::npos ? "\n" : "\r\n";
+  for (std::size_t i = 0; i < items.size(); ++i)
+    if (eligible[i] && !items[i].header.empty() && included.insert(items[i].header).second)
+      block += "#include " + items[i].header + newline;
+  if (block.empty()) return std::string(source);
+  const auto insertion = items[definition].end;
+  if (insertion && source[insertion - 1] != '\n') block.insert(0, newline);
+  std::string output;
+  std::size_t cursor = 0;
+  bool inserted = false;
+  for (std::size_t i = 0; i < items.size(); ++i) {
+    const auto &item = items[i];
+    // Never remove a conditional inclusion preceding the new include block.
+    if (item.header.empty() || !included.count(item.header) || (!eligible[i] && item.begin < insertion)) continue;
+    if (!inserted && insertion <= item.line) {
+      output.append(source.substr(cursor, insertion - cursor));
+      output += block;
+      cursor = insertion;
+      inserted = true;
+    }
+    output.append(source.substr(cursor, item.line - cursor));
+    for (std::size_t c = 0; c < item.comments.size(); ++c) {
+      const auto comment = item.comments[c];
+      if (c) output += ' ';
+      output.append(source.substr(comment.begin, comment.end - comment.begin));
+    }
+    if (!item.comments.empty() || (item.line > 0 && source[item.line - 1] != '\n'))
+      output += newline;
+    cursor = item.end;
+  }
+  if (!inserted) {
+    output.append(source.substr(cursor, insertion - cursor));
+    output += block;
+    cursor = insertion;
+  }
+  output.append(source.substr(cursor));
+  return output;
 }
 } // namespace
 
@@ -178,8 +426,6 @@ static std::string clean_pass(std::string_view source, bool metadata, bool blank
   const LogicalSource view(source);
   const auto &text = view.text;
   std::vector<Range> edits, protected_ranges;
-  std::set<std::string> included;
-  unsigned braces = 0;
   bool line_start = true;
   DocMode line_doc;
   std::size_t previous_doc_end = std::string_view::npos;
@@ -188,12 +434,10 @@ static std::string clean_pass(std::string_view source, bool metadata, bool blank
     if (horizontal(text[i])) { ++i; continue; }
     const auto raw = raw_end(view, source, i);
     if (raw != i) {
-      included.clear();
       protected_ranges.push_back({view.physical[i], view.physical[raw]});
       i = raw; line_start = false; continue;
     }
     if (text[i] == '"' || text[i] == '\'') {
-      included.clear();
       const auto end = quoted_end(text, i);
       protected_ranges.push_back({view.physical[i], view.physical[end]});
       i = end; line_start = false; continue;
@@ -251,47 +495,9 @@ static std::string clean_pass(std::string_view source, bool metadata, bool blank
       const auto begin_physical = view.physical[i], end_physical = view.physical[end];
       protected_ranges.push_back({begin_physical, end_physical +
           (end_physical < source.size() && source[end_physical] == '\n')});
-      auto token = i + (text[i] == '#' ? 1 : 2);
-      while (token < end && horizontal(text[token])) ++token;
-      const auto word_begin = token;
-      while (token < end && identifier(text[token])) ++token;
-      const auto word = text.substr(word_begin, token - word_begin);
-      bool ordinary_include = false;
-      if (metadata && word == "include" && !braces &&
-          source.substr(begin_physical, end_physical - begin_physical).find('\\') == std::string_view::npos) {
-        while (token < end && horizontal(text[token])) ++token;
-        if (token < end && text[token] == '<') {
-          const auto close = text.find('>', token + 1);
-          if (close < end) {
-            const auto header = text.substr(token + 1, close - token - 1);
-            auto tail = close + 1;
-            while (tail < end && horizontal(text[tail])) ++tail;
-            // Keep directives with trailing comments intact rather than discard their text.
-            if (tail == end && standard_header(header)) {
-              ordinary_include = true;
-              if (!included.insert(header).second) {
-                auto line = begin_physical;
-                while (line && source[line - 1] != '\n' && horizontal(source[line - 1])) --line;
-                if (line == 0 || source[line - 1] == '\n')
-                  edits.push_back({line, end_physical + (end_physical < source.size() && source[end_physical] == '\n')});
-                else
-                  edits.push_back({begin_physical, end_physical});
-              }
-            }
-          }
-        }
-      }
-      if (!ordinary_include) included.clear();
       i = end; continue;
     }
     line_start = false;
-    // Arbitrary code can expand an externally defined or token-pasted pragma.
-    // Reuse only uninterrupted include groups; comments/whitespace are harmless.
-    included.clear();
-    if (text.compare(i, 2, "<%") == 0) { ++braces; i += 2; continue; }
-    if (text.compare(i, 2, "%>") == 0) { if (braces) --braces; i += 2; continue; }
-    if (text[i] == '{') ++braces;
-    else if (text[i] == '}' && braces) --braces;
     if (std::isdigit(static_cast<unsigned char>(text[i])) ||
         (text[i] == '.' && i + 1 < text.size() && std::isdigit(static_cast<unsigned char>(text[i + 1])))) {
       // A pp-number's apostrophes are digit separators, not character literals.
@@ -328,9 +534,11 @@ static std::string clean_pass(std::string_view source, bool metadata, bool blank
   output.append(source.substr(cursor));
   return output;
 }
-std::string cleanup_output(std::string_view source) {
-  // Deduplication can expose adjacent blank lines; classify the resulting bytes
-  // again before collapsing them. Two bounded passes keep cleanup idempotent.
-  return clean_pass(clean_pass(source, true, false), false, true);
+std::string cleanup_output(std::string_view source, bool deduplicate_includes,
+                           std::string_view include_guard,
+                           const std::vector<std::string> &allow_mixed_includes) {
+  const auto assembled = deduplicate_includes ? hoist_includes(source, include_guard, allow_mixed_includes) : std::string(source);
+  // Reclassify after metadata edits before the final blank-line collapse.
+  return clean_pass(clean_pass(assembled, true, false), false, true);
 }
 } // namespace single_header

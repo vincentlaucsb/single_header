@@ -6,16 +6,38 @@ The default build and release binaries retain the lightweight generator; request
 stitching from those binaries fails with build instructions. Explicit `off`
 overrides JSON configuration and follows the original generation path.
 
-Both generation paths apply automatic final-output cleanup: ordinary repeated
-blank lines collapse, Doxygen file directives lose only their command/optional
-filename, and redundant recognized standard-library includes are removed within
-one uninterrupted include group in a preprocessing branch at global scope. The first include stays
-in place. Branch boundaries, macro changes, unknown includes and pragmas invalidate
-reuse; assertion headers and trailing-comment includes remain. Ordinary code,
-including possible macro invocations, ends an include group; comments and whitespace
-may separate its includes. Literal/comment payloads, continued
-directives, licenses and Doxygen code/verbatim/fenced examples are protected.
-The same cleanup is part of every unstitched baseline, trial and final renderer.
+Both generation paths automatically collapse repeated ordinary blank lines and
+remove Doxygen file directives' command/optional filename. Literal/comment
+payloads, continued directives, licenses, and Doxygen code/verbatim/fenced
+examples remain protected.
+
+Include hoisting and deduplication is a separate option, off by default. Set
+`--deduplicate-includes --include-guard MYLIB_HPP` (JSON `deduplicateIncludes: true`
+and `includeGuard: "MYLIB_HPP"`); the name is required configuration, with no
+hardcoded guard. After stitching edits and collation assemble the text, the pass
+first audits all literal includes for mixed guarded and unguarded occurrences,
+ignoring only the configured outer guard. Every conflict is reported together,
+with assembled line numbers and guarding directives. An error leaves existing
+output/report files untouched and aborts before compiler discovery. Explicit
+repeatable `--allow-mixed-include '<thread>'` waivers (JSON `allowMixedIncludes`
+string array, Action multiline `allow-mixed-include`) suppress only that audit
+identity: they never exclude a header from hoisting. CLI waivers replace the JSON
+list; delimiter spelling distinguishes angle from quoted operands. With the audit
+satisfied, the pass gathers every unguarded literal angle/quoted include, treating only that outer
+guard as transparent, and emits a first-seen-order block immediately after its
+opening `#define`. Code, namespaces, and unrelated macros do not limit the scan.
+It removes later occurrences of those same literal includes, even in conditional
+branches; distinct conditional-only includes and macro-expanded operands stay in
+place. Angle and quote operands are distinct. Comments remain at their original
+locations. Missing, ambiguous, malformed, or alternatively branched outer guards
+fail clearly. `--no-deduplicate-includes` overrides configured enablement.
+
+This explicit reordering assumes dependencies suitable for inclusion before their
+original code, scope, and macro settings; it is not a compiler-equivalence claim.
+See the [README](../README.md) for complete include-pass behavior. Each unstitched
+baseline, stitched trial, and final render uses the same optional audit/include pass,
+automatic metadata cleanup, and final blank-line collapse. Consequently compiler
+checks and report sizes describe the exact bytes written, including postprocessing.
 
 The implementation lives in `src/stitching/`: `engine.cpp` coordinates discovery,
 generated baselines, trial batches and reports; `frontend.cpp` owns Clang parsing
@@ -280,21 +302,32 @@ and nine fresh final parses. One diagnostic-guided partition isolated a relocati
 that needed a source-only helper; canonical edit-set caching reused its failed
 batch result. The report recorded 1,014,596 canonical-type cache hits.
 
-With cleanup enabled on the same upstream revision and nine contexts, all 69
-definitions still relocate. The unstitched baseline is 680,124 bytes and the final
-header is 674,256 bytes: 5,868 bytes saved by stitching with cleanup applied to
-both sides. Cleanup alone saves 479 bytes on the unstitched header and 816 bytes
-on the previously stitched header. The combined reduction from the original
-680,603-byte output is 6,347 bytes. It removes 13 redundant standard-header
-directives (253 to 240 angle includes), all 27 Doxygen file directives, and
-ordinary repeated blank-line runs. The final run took 58,563 ms analysis and
-58,631 ms external wall time, with the same 37 frontend parses and skip reasons;
-these timings vary between local runs. Both compilers and the unstitched control
-passed the runtime groups described below on the cleaned output.
+The replacement opt-in include-hoisting pass was measured before the mixed-guard
+audit was added. Using `--deduplicate-includes --include-guard CSV_HPP`, the same
+nine-context run relocated all 69 definitions and produced a 670,773-byte header
+from a matching 676,641-byte unstitched baseline (5,868 bytes saved by stitching).
+Include hoisting saved 3,727 bytes against the 680,368-byte default unstitched
+output, reduced literal include directives from 253 to 63, and placed 33 unique
+headers after the configured guard. `<algorithm>`, `<vector>` and `<string>` each
+appeared once. Analysis took 64,707 ms (64,791 ms external wall time), with the
+same 37 frontend parses and skip reasons. Timings vary between local runs.
+
+The current strict audit intentionally rejects that upstream revision before
+Clang discovery or output writing: 22 headers have both guarded and unguarded
+occurrences. In particular, `data_frame_executor.hpp` includes `<thread>` without
+the `CSV_ENABLE_THREADS` guard used by the scheduler and task pool. This is tracked
+in [csv-parser #346](https://github.com/vincentlaucsb/csv-parser/issues/346).
+A local, ignored validation config waives only `<thread>` for development; the
+other 21 diagnostics remain errors. No upstream configuration or production
+exception list was changed. The preceding size/runtime measurements describe the
+preserved pre-audit artifact, not a successful strict-audit generation. Generating
+it under the current policy requires resolving the remaining conflicts or
+explicitly reviewing and waiving each one.
 
 MSVC and Clang consumers also passed the upstream 56-case suite (87,097
 assertions), the 500,000-row dual-path runtime check, and exception-enabled and
-compiler-disabled-exception smoke tests on the expanded artifact. The remaining
+compiler-disabled-exception smoke tests on the preserved hoisted artifact. Its
+matching unstitched control passed the same four runtime groups. The remaining
 skips retain their source implementations and explicit reasons in the report.
 
 The original-to-unstitched report identifies a preexisting collation difference:

@@ -28,6 +28,9 @@ struct CliOptions {
   bool frontend_args_set = false;
   bool report_set = false;
   bool annotations_set = false;
+  bool deduplicate_includes_set = false;
+  bool include_guard_set = false;
+  bool allow_mixed_includes_set = false;
 };
 
 std::vector<std::pair<std::string, std::string>>
@@ -96,6 +99,15 @@ CliOptions parse_cli_args(int argc, char **argv) {
     } else if (arg == "--stitching-report") {
       cli.options.stitching_report = require_value(&i, arg);
       cli.report_set = true;
+    } else if (arg == "--deduplicate-includes" || arg == "--no-deduplicate-includes") {
+      cli.options.deduplicate_includes = arg == "--deduplicate-includes";
+      cli.deduplicate_includes_set = true;
+    } else if (arg == "--include-guard") {
+      cli.options.include_guard = require_value(&i, arg);
+      cli.include_guard_set = true;
+    } else if (arg == "--allow-mixed-include") {
+      cli.options.allow_mixed_includes.push_back(require_value(&i, arg));
+      cli.allow_mixed_includes_set = true;
     } else if (arg == "--inline-annotation") {
       cli.options.inline_annotations.push_back(require_value(&i, arg));
       cli.annotations_set = true;
@@ -130,6 +142,12 @@ Options:
   --implementation-marker <text> Marker replaced by stripped source text.
   --entry <path>                 Optional top-level header; limits output to reachable
                                 scanned headers.
+  --deduplicate-includes        Hoist unguarded literal includes after the configured
+                                outer guard's #define, removing their repeats. Default off.
+  --no-deduplicate-includes     Disable include hoisting, overriding JSON configuration.
+  --include-guard <macro>        Outer guard name required by --deduplicate-includes.
+  --allow-mixed-include <operand> Waive mixed guarded/unguarded audit for one literal
+                                operand, e.g. '<thread>'. Still hoists; may be repeated.
   --function-stitching <mode>    off (default), free, methods, or all. Requires Clang build.
   --compilation-database <path>  compile_commands.json or its directory; one command per source.
   --frontend-arg <argument>      Complete Clang frontend arguments instead of a database.
@@ -186,6 +204,9 @@ Options parse_args(int argc, char **argv) {
   if (cli.frontend_args_set) options.frontend_args = cli.options.frontend_args;
   if (cli.report_set) options.stitching_report = cli.options.stitching_report;
   if (cli.annotations_set) options.inline_annotations = cli.options.inline_annotations;
+  if (cli.deduplicate_includes_set) options.deduplicate_includes = cli.options.deduplicate_includes;
+  if (cli.include_guard_set) options.include_guard = cli.options.include_guard;
+  if (cli.allow_mixed_includes_set) options.allow_mixed_includes = cli.options.allow_mixed_includes;
 
   if (options.include_roots.empty()) {
     throw std::runtime_error("at least one --include-root is required");

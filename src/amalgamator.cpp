@@ -354,7 +354,12 @@ std::string generate(const Options &options) {
       header_concat += source_concat;
     }
 
-    return cleanup_output("#pragma once\n" + header_concat);
+    // Source overrides (including stitching edits) are assembled before either
+    // optional include hoisting or automatic metadata/blank-line cleanup. Every
+    // baseline, trial and final validation receives these exact rendered bytes.
+    return cleanup_output("#pragma once\n" + header_concat,
+                          options.deduplicate_includes, options.include_guard,
+                          options.allow_mixed_includes);
   };
   if (options.function_stitching != "off") {
     return stitch_functions(options, files.headers, files.sources, render);

@@ -37,7 +37,8 @@ std::string config_relative_pattern(const fs::path &config_dir, const std::strin
 void reject_unknown_config_keys(const json &document, const fs::path &path) {
   static const std::set<std::string> known_keys = {
     "includeRoots", "output", "sources", "rewriteMacros", "implementationMarker", "entry",
-    "functionStitching", "compilationDatabase", "frontendArgs", "stitchingReport", "inlineAnnotations"};
+    "functionStitching", "compilationDatabase", "frontendArgs", "stitchingReport", "inlineAnnotations",
+    "deduplicateIncludes", "includeGuard", "allowMixedIncludes"};
 
   for (auto it = document.begin(); it != document.end(); ++it) {
     if (!known_keys.count(it.key())) {
@@ -134,6 +135,16 @@ Options read_config(const fs::path &config_path) {
   }
   options.frontend_args = read_json_string_array(document, "frontendArgs", config_path);
   options.inline_annotations = read_json_string_array(document, "inlineAnnotations", config_path);
+  options.allow_mixed_includes = read_json_string_array(document, "allowMixedIncludes", config_path);
+  if (document.contains("deduplicateIncludes")) {
+    if (!document.at("deduplicateIncludes").is_boolean()) {
+      throw std::runtime_error("deduplicateIncludes in " + config_path.string() + " must be a boolean");
+    }
+    options.deduplicate_includes = document.at("deduplicateIncludes").get<bool>();
+  }
+  if (document.contains("includeGuard")) {
+    options.include_guard = read_json_string(document, "includeGuard", config_path);
+  }
 
   if (document.contains("rewriteMacros")) {
     const auto &rewrites = document.at("rewriteMacros");

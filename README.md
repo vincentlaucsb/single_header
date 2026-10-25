@@ -15,9 +15,8 @@ The repository also includes a composite GitHub Action that downloads a released
 - Scans `.h`, `.hpp`, and `.cpp` files from one or more include roots.
 - Inlines each known project header once, including diamond dependencies and
   repeated quote/angle references to the same header.
-- Removes redundant recognized standard-library includes within an uninterrupted
-  include group within a preprocessing branch, preserving their original positions. Unknown/vendor
-  headers, assertion headers, nested includes and preprocessing barriers remain.
+- Optionally hoists unguarded literal includes after a configured outer header
+  guard's `#define`, then removes repeats of those includes throughout the output.
 - Optionally limits output to headers reachable from an entry header.
 - Supports extra source files, directories, or glob patterns.
 - Rewrites selected `#define NAME` directives with CLI or JSON config values.
@@ -30,11 +29,43 @@ The repository also includes a composite GitHub Action that downloads a released
   licenses, and Doxygen code/verbatim/fenced examples are preserved.
 
 Cleanup applies to both ordinary generation and stitching. Include deduplication
-does not hoist headers or combine separate conditional branches. Macro changes,
-unknown includes, pragmas and ordinary code invalidate include reuse. Comments and
-whitespace may separate includes within a group. Repeated `<cassert>`/`<assert.h>`
-remain because their reinclusion can depend on `NDEBUG`. Includes with trailing comments remain
-intact, preserving rationale and license text.
+is **off by default**, so unresolved include directives retain their repetitions.
+Enable it with `--deduplicate-includes --include-guard MYLIB_HPP`, or JSON
+`"deduplicateIncludes": true` and `"includeGuard": "MYLIB_HPP"`. The guard name has
+no default and is never inferred. The configured outer `#ifndef` (or
+`#if !defined(...)`) must have one matching opening `#define` and closing `#endif`,
+without alternate branches; a missing, invalid, or ambiguous guard is an error.
+
+The optional pass runs on assembled text after stitching edits, before final
+blank-line collapse. Before moving anything, it audits literal includes: a header
+with both unguarded and conditionally guarded occurrences fails generation. The
+configured outer guard is transparent to this check. The error lists every mixed
+identity with assembled line numbers and guarding directives; existing output and
+stitching-report files remain untouched. Review each dependency and either fix its
+include guards upstream or explicitly waive that header with repeatable
+`--allow-mixed-include '<thread>'`, JSON `"allowMixedIncludes": ["<thread>"]`, or the
+Action's multiline `allow-mixed-include` input. A waiver suppresses only this audit:
+the dependency still hoists, and its later guarded duplicates are still removed.
+An unrelated waiver never hides another header's conflict. Deduplication off skips
+the audit.
+
+The pass gathers all literal `<...>` and `"..."` includes with no
+conditional guard except the configured outer guard, in first-seen order, and
+places them immediately after that guard's opening `#define`. Ordinary code,
+namespaces, and unrelated macro definitions do not stop the pass. Angle and
+quoted names are separate identities. Repeats after the new block are removed,
+including guarded repeats; headers appearing only under other conditional guards
+stay in place. Conditional includes before the new block remain. Comments and
+license text survive at their original locations; continued and digraph include
+directives are recognized. Macro-expanded include operands stay unchanged because
+the text pass cannot determine their header identity.
+
+Choose this opt-in reordering only for dependencies whose inclusion order, macro
+configuration, and C++ scope permit hoisting. This includes assertion and vendor
+headers: they receive the same literal-include treatment. The pass makes no general
+compiler-equivalence claim. When stitching is enabled, the baseline, trials, final
+validation, and report byte counts all use the same fully postprocessed output.
+`--no-deduplicate-includes` explicitly overrides an enabled JSON setting.
 
 ## Building
 
@@ -84,6 +115,10 @@ Common options:
 --implementation-marker <text> Marker replaced by stripped source text.
 --entry <path>                 Optional top-level header; limits output to reachable
                                scanned headers.
+--deduplicate-includes        Hoist/deduplicate literal includes; default off.
+--no-deduplicate-includes     Disable include hoisting, overriding JSON config.
+--include-guard <macro>        Outer guard name required when hoisting is enabled.
+--allow-mixed-include <operand> Waive one mixed-guard audit identity; repeatable.
 --function-stitching <mode>    off (default), free, methods, or all; requires Clang build.
 --compilation-database <path>  compile_commands.json or its directory.
 --frontend-arg <argument>      Complete frontend arguments instead of a database; repeatable.
@@ -106,12 +141,21 @@ default. You can also pass a config explicitly with `--config`.
     "MYLIB_INLINE": "inline"
   },
   "implementationMarker": "MYLIB_IMPLEMENTATION_MARKER",
-  "entry": "include/mylib/api.hpp"
+  "entry": "include/mylib/api.hpp",
+  "deduplicateIncludes": false,
+  "includeGuard": "MYLIB_HPP",
+  "allowMixedIncludes": []
 }
 ```
 
 CLI flags override config values. Repeated `--rewrite-macro` flags merge with
-config rewrites, with CLI values winning for matching names.
+config rewrites, with CLI values winning for matching names. Explicit
+`--allow-mixed-include` flags replace the JSON waiver list. Include the literal
+delimiters in each waiver: `<thread>` and `"thread"` are different identities.
+Shell quoting must preserve those delimiters: POSIX shells and PowerShell accept
+`--allow-mixed-include '<thread>'` or `--allow-mixed-include '"thread"'`; in Windows
+`cmd.exe`, use `--allow-mixed-include "<thread>"` or
+`--allow-mixed-include "\"thread\""`.
 
 ## GitHub Action
 
@@ -125,6 +169,12 @@ Use this repository as a composite action from a release tag:
 ```
 
 The action downloads the matching release asset for the runner platform and
+accepts `deduplicate-includes: "true"` or `"false"` and `include-guard: MYLIB_HPP`.
+Omitting `deduplicate-includes` preserves JSON configuration (or the default off);
+an explicit false forwards `--no-deduplicate-includes`. The optional multiline
+`allow-mixed-include` input forwards one complete literal operand per line and
+replaces configured waivers when supplied. It does not exclude headers from
+hoisting. The action also
 exposes the installed executable as the `executable` output. Set `run: "false"`
 to install the tool without immediately running it.
 

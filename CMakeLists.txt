@@ -100,4 +100,11 @@ if(BUILD_TESTING)
     SINGLE_HEADER_TEST_CMAKE_GENERATOR="${CMAKE_GENERATOR}")
 
   catch_discover_tests(single_header_tests)
+  find_program(SINGLE_HEADER_PWSH_EXECUTABLE pwsh)
+  if(SINGLE_HEADER_PWSH_EXECUTABLE)
+    add_test(NAME action_include_forwarding
+      COMMAND "${SINGLE_HEADER_PWSH_EXECUTABLE}" -NoProfile -File
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_action.ps1"
+        -SourceRoot "${CMAKE_CURRENT_SOURCE_DIR}" -BinaryRoot "${CMAKE_CURRENT_BINARY_DIR}")
+  endif()
 endif()

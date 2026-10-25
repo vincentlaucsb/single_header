@@ -23,6 +23,9 @@ struct Options {
   std::vector<std::string> frontend_args;
   std::filesystem::path stitching_report;
   std::vector<std::string> inline_annotations;
+  bool deduplicate_includes = false;
+  std::string include_guard;
+  std::vector<std::string> allow_mixed_includes;
   std::filesystem::path config_file;
   bool show_help = false;
 };

@@ -876,3 +876,65 @@ TEST_CASE("defaulted constructors and global allocation replacements stay deferr
   CHECK(fixture.reason(data, "operator new") == "global_allocation_replacement");
   CHECK(fixture.reason(data, "safe") == "accepted");
 }
+
+TEST_CASE("include hoisting participates in stitched exact output and report bytes", "[stitching][includes]") {
+  StitchFixture fixture("stitched_includes");
+  fixture.files("#ifndef STITCH_GUARD\n#define STITCH_GUARD\nstruct Marker {};\n"
+      "#include <cstddef>\nint safe();\n#endif\n",
+      "#include <cstddef>\nint safe() { return sizeof(std::size_t); }\n");
+  const std::string flags = "--deduplicate-includes --include-guard STITCH_GUARD";
+  const auto data = fixture.generate("free", flags);
+  CHECK(data.at("baseline") == "valid");
+  CHECK(fixture.reason(data, "safe") == "accepted");
+  const auto stitched = read_text(fixture.output);
+  CHECK(stitched == "#pragma once\n#ifndef STITCH_GUARD\n#define STITCH_GUARD\n#include <cstddef>\n"
+      "struct Marker {};\ninline int safe() { return sizeof(std::size_t); }\n#endif\n\n");
+  CHECK(stitched.find("#define STITCH_GUARD\n#include <cstddef>\nstruct Marker {};\n") != std::string::npos);
+  const auto first = stitched.find("#include <cstddef>");
+  REQUIRE(first != std::string::npos);
+  CHECK(stitched.find("#include <cstddef>", first + 1) == std::string::npos);
+  CHECK(stitched.find("inline int safe() { return sizeof(std::size_t); }") != std::string::npos);
+  run_command(fixture.command("off", flags));
+  const auto unstitched = read_text(fixture.output);
+  CHECK(data.at("bytes").at("unstitched") == unstitched.size());
+  CHECK(data.at("bytes").at("stitched") == stitched.size());
+  CHECK(data.at("bytes").at("savings") == static_cast<std::int64_t>(unstitched.size()) -
+      static_cast<std::int64_t>(stitched.size()));
+  run_command(fixture.command("free", flags));
+  CHECK(read_text(fixture.output) == stitched);
+}
+
+TEST_CASE("an invalid include-hoisted baseline explicitly prevents relocation", "[stitching][includes][errors]") {
+  StitchFixture fixture("invalid_hoisted_baseline");
+  const auto vendor = fixture.work / "vendor";
+  write_text(vendor / "dependent.hpp", "#ifndef REQUIRED_MODE\n#error include requires its macro\n#endif\n");
+  fixture.files("#ifndef VALIDATE_GUARD\n#define VALIDATE_GUARD\n#define REQUIRED_MODE 1\n"
+      "#include <dependent.hpp>\nint safe();\n#endif\n", "int safe() { return 1; }\n");
+  const auto flags = "--deduplicate-includes --include-guard VALIDATE_GUARD --frontend-arg " +
+      quote_value("-I" + vendor.generic_string());
+  const auto data = fixture.generate("free", flags);
+  CHECK(data.at("baseline") == "invalid");
+  CHECK(data.at("baselineDiagnostics").get<std::string>().find("include requires its macro") != std::string::npos);
+  CHECK(fixture.reason(data, "safe") == "baseline_invalid");
+  CHECK(data.at("counts").at("removedBodies") == 0);
+  const auto unchanged = read_text(fixture.output);
+  CHECK(data.at("bytes").at("stitched") == unchanged.size());
+  CHECK(data.at("bytes").at("unstitched") == unchanged.size());
+  run_command(fixture.command("off", flags));
+  CHECK(read_text(fixture.output) == unchanged);
+}
+
+TEST_CASE("mixed-include audit fails before stitching discovery without clobbering artifacts", "[stitching][includes][audit]") {
+  StitchFixture fixture("mixed_include_discovery");
+  fixture.files("#ifndef DISCOVERY_GUARD\n#define DISCOVERY_GUARD\n#include <thread>\n"
+      "#if FEATURE\n#include <thread>\n#endif\nint safe();\n#endif\n", "this is deliberately invalid C++;\n");
+  write_text(fixture.output, "output sentinel");
+  write_text(fixture.report, "report sentinel");
+  const auto result = run_result(fixture.command("free", "--deduplicate-includes --include-guard DISCOVERY_GUARD"));
+  CHECK(result.status != 0);
+  CHECK(result.error.find("<thread>: unguarded") != std::string::npos);
+  CHECK(result.error.find("stitching discovering") == std::string::npos);
+  CHECK(result.error.find("original analysis failed") == std::string::npos);
+  CHECK(read_text(fixture.output) == "output sentinel");
+  CHECK(read_text(fixture.report) == "report sentinel");
+}

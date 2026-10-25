@@ -37,6 +37,15 @@ inputs:
   entry:
     description: Optional top-level header path.
     required: false
+  deduplicate-includes:
+    description: Optional true or false; hoist unguarded literal includes after include-guard and remove repeats. Omit to use JSON/default off.
+    required: false
+  include-guard:
+    description: Outer header guard macro name, required when include deduplication is enabled.
+    required: false
+  allow-mixed-include:
+    description: Literal include operands (including angle or quote delimiters), one per line; waive only the mixed-guard audit, still hoisting normally.
+    required: false
   function-stitching:
     description: Optional off, free, methods, or all. Requires a Clang-enabled executable for stitching.
     required: false
@@ -160,6 +169,9 @@ runs:
         INPUT_REWRITE_MACRO: ${{ inputs.rewrite-macro }}
         INPUT_IMPLEMENTATION_MARKER: ${{ inputs.implementation-marker }}
         INPUT_ENTRY: ${{ inputs.entry }}
+        INPUT_DEDUPLICATE_INCLUDES: ${{ inputs.deduplicate-includes }}
+        INPUT_INCLUDE_GUARD: ${{ inputs.include-guard }}
+        INPUT_ALLOW_MIXED_INCLUDE: ${{ inputs.allow-mixed-include }}
         INPUT_FUNCTION_STITCHING: ${{ inputs.function-stitching }}
         INPUT_COMPILATION_DATABASE: ${{ inputs.compilation-database }}
         INPUT_FRONTEND_ARG: ${{ inputs.frontend-arg }}
@@ -206,6 +218,17 @@ runs:
         if ($env:INPUT_ENTRY) {
           $toolArgs += @("--entry", $env:INPUT_ENTRY)
         }
+        if ($env:INPUT_DEDUPLICATE_INCLUDES) {
+          switch ($env:INPUT_DEDUPLICATE_INCLUDES) {
+            "true" { $toolArgs += "--deduplicate-includes" }
+            "false" { $toolArgs += "--no-deduplicate-includes" }
+            default { throw "deduplicate-includes expects true or false" }
+          }
+        }
+        if ($env:INPUT_INCLUDE_GUARD) {
+          $toolArgs += @("--include-guard", $env:INPUT_INCLUDE_GUARD)
+        }
+        $toolArgs = Add-MultilineArgs $toolArgs "--allow-mixed-include" $env:INPUT_ALLOW_MIXED_INCLUDE
         if ($env:INPUT_FUNCTION_STITCHING) {
           $toolArgs += @("--function-stitching", $env:INPUT_FUNCTION_STITCHING)
         }
