@@ -938,3 +938,90 @@ TEST_CASE("mixed-include audit fails before stitching discovery without clobberi
   CHECK(read_text(fixture.output) == "output sentinel");
   CHECK(read_text(fixture.report) == "report sentinel");
 }
+
+
+TEST_CASE("recursive namespace cleanup participates in stitched final output and exact report bytes", "[stitching][namespaces][runtime]") {
+  StitchFixture fixture("stitched_namespaces");
+  fixture.files("#ifndef STITCH_NAMESPACE_GUARD\n#define STITCH_NAMESPACE_GUARD\n"
+      "namespace api { namespace middle { namespace leaf { struct Marker {}; } } }\n"
+      "#include <cstddef>\n"
+      "namespace api { namespace middle { namespace leaf { int safe(); } } }\n/** INSERT_CSV_SOURCES **/\n#endif\n",
+      "namespace api { namespace middle { namespace leaf { int safe() { return sizeof(std::size_t); } } } }\n");
+  const std::string flags = "--merge-namespaces --deduplicate-includes --include-guard STITCH_NAMESPACE_GUARD";
+  const auto data = fixture.generate("free", flags);
+  CHECK(data.at("baseline") == "valid");
+  CHECK(fixture.reason(data, "api::middle::leaf::safe") == "accepted");
+  const auto stitched = read_text(fixture.output);
+  for (const auto *name : {"api", "middle", "leaf"}) {
+    const auto word = std::string("namespace ") + name;
+    const auto first = stitched.find(word);
+    REQUIRE(first != std::string::npos);
+    CHECK(stitched.find(word, first + word.size()) == std::string::npos);
+  }
+  run_command(fixture.command("off", flags));
+  const auto unstitched = read_text(fixture.output);
+  CHECK(data.at("bytes").at("unstitched") == unstitched.size());
+  CHECK(data.at("bytes").at("stitched") == stitched.size());
+  CHECK(data.at("bytes").at("savings") == static_cast<std::int64_t>(unstitched.size()) - static_cast<std::int64_t>(stitched.size()));
+  run_command(fixture.command("free", flags));
+  CHECK(read_text(fixture.output) == stitched);
+  fixture.runtime("int one() { return api::middle::leaf::safe(); }\n",
+      "int two() { return api::middle::leaf::safe(); }\n",
+      "int one(); int two(); int main() { return one() > 0 && one() == two() ? 0 : 1; }\n");
+}
+
+
+TEST_CASE("source location values reject changed residual neighbors without a global veto", "[stitching][source-location]") {
+  StitchFixture fixture("source_location_body");
+  fixture.files("#pragma once\nint safe(); inline int column() { return __builtin_COLUMN(); }\nint untouched();\n",
+      "int safe() { return 7; }\nint untouched() { return 9; }\n");
+  const auto data = fixture.generate("free");
+  CHECK(data.at("baseline") == "valid");
+  CHECK(fixture.reason(data, "safe").find("changed_semantics:") == 0);
+  CHECK(fixture.reason(data, "untouched") == "accepted");
+  CHECK(data.at("counts").at("acceptedFree") == 1);
+  CHECK(read_text(fixture.output).find("int safe(); inline int column() { return __builtin_COLUMN(); }") != std::string::npos);
+}
+
+TEST_CASE("source location values participate in default variable and field declaration records", "[stitching][source-location]") {
+  const std::vector<std::pair<std::string, std::string>> declarations = {
+      {"default", "int observed(int input = __builtin_COLUMN());"},
+      {"variable", "inline unsigned observed = __builtin_COLUMN();"},
+      {"field", "struct Observed { unsigned value = __builtin_COLUMN(); };"}};
+  for (const auto &[name, declaration] : declarations) {
+    INFO(name);
+    StitchFixture fixture("source_location_" + name);
+    fixture.files("#pragma once\nint safe(); " + declaration + "\nint untouched();\n",
+        "int safe() { return 7; }\nint untouched() { return 9; }\n");
+    const auto data = fixture.generate("free");
+    CHECK(data.at("baseline") == "valid");
+    CHECK(fixture.reason(data, "safe").find("changed_declaration:" + name + ":") == 0);
+    CHECK(fixture.reason(data, "untouched") == "accepted");
+  }
+}
+
+TEST_CASE("source location defaults retain their actual call and aggregate initialization contexts", "[stitching][source-location]") {
+  const std::vector<std::pair<std::string, std::string>> contexts = {
+    {"argument", "inline unsigned observed(unsigned value = __builtin_COLUMN()) { return value; }\n"
+                 "int safe(); inline unsigned column() { return observed(); }\n"},
+    {"initializer", "struct Observed { unsigned value = __builtin_COLUMN(); };\n"
+                    "int safe(); inline unsigned column() { Observed object{}; return object.value; }\n"},
+    {"array", "struct Observed { unsigned value = __builtin_COLUMN(); };\n"
+              "int safe(); inline unsigned column() { Observed objects[2]{}; return objects[1].value; }\n"},
+    {"nested", "namespace std { struct source_location { struct __impl { const char *_M_file_name; "
+               "const char *_M_function_name; unsigned _M_line; unsigned _M_column; }; "
+               "const __impl *data; static constexpr source_location current(const __impl *p = __builtin_source_location()) { return {p}; } "
+               "constexpr unsigned column() const { return data->_M_column; } }; }\n"
+               "inline unsigned observed(std::source_location location = std::source_location::current()) { return location.column(); }\n"
+               "int safe(); inline unsigned column() { return observed(); }\n"}};
+  for (const auto &[name, header] : contexts) {
+    INFO(name);
+    StitchFixture fixture("source_location_context_" + name);
+    fixture.files("#pragma once\n" + header + "int untouched();\n",
+        "int safe() { return 7; }\nint untouched() { return 9; }\n");
+    const auto data = fixture.generate("free");
+    CHECK(data.at("baseline") == "valid");
+    CHECK(fixture.reason(data, "safe").find("changed_semantics:") == 0);
+    CHECK(fixture.reason(data, "untouched") == "accepted");
+  }
+}

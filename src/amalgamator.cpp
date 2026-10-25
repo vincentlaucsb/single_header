@@ -359,7 +359,7 @@ std::string generate(const Options &options) {
     // baseline, trial and final validation receives these exact rendered bytes.
     return cleanup_output("#pragma once\n" + header_concat,
                           options.deduplicate_includes, options.include_guard,
-                          options.allow_mixed_includes);
+                          options.allow_mixed_includes, options.merge_namespaces);
   };
   if (options.function_stitching != "off") {
     return stitch_functions(options, files.headers, files.sources, render);

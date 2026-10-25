@@ -38,7 +38,7 @@ void reject_unknown_config_keys(const json &document, const fs::path &path) {
   static const std::set<std::string> known_keys = {
     "includeRoots", "output", "sources", "rewriteMacros", "implementationMarker", "entry",
     "functionStitching", "compilationDatabase", "frontendArgs", "stitchingReport", "inlineAnnotations",
-    "deduplicateIncludes", "includeGuard", "allowMixedIncludes"};
+    "deduplicateIncludes", "includeGuard", "allowMixedIncludes", "mergeNamespaces"};
 
   for (auto it = document.begin(); it != document.end(); ++it) {
     if (!known_keys.count(it.key())) {
@@ -141,6 +141,12 @@ Options read_config(const fs::path &config_path) {
       throw std::runtime_error("deduplicateIncludes in " + config_path.string() + " must be a boolean");
     }
     options.deduplicate_includes = document.at("deduplicateIncludes").get<bool>();
+  }
+  if (document.contains("mergeNamespaces")) {
+    if (!document.at("mergeNamespaces").is_boolean()) {
+      throw std::runtime_error("mergeNamespaces in " + config_path.string() + " must be a boolean");
+    }
+    options.merge_namespaces = document.at("mergeNamespaces").get<bool>();
   }
   if (document.contains("includeGuard")) {
     options.include_guard = read_json_string(document, "includeGuard", config_path);

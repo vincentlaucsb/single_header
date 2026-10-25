@@ -4,6 +4,8 @@
 #include "../helpers.hpp"
 
 #include <clang/AST/ASTContext.h>
+#include <clang/AST/APValue.h>
+#include <clang/AST/CurrentSourceLocExprScope.h>
 #include <clang/AST/Attr.h>
 #include <clang/AST/DeclCXX.h>
 #include <clang/AST/DeclTemplate.h>
@@ -88,6 +90,7 @@ struct Semantics : RecursiveASTVisitor<Semantics> {
   std::ostringstream out;
   std::string unsupported;
   bool internal_dependency = false;
+  CurrentSourceLocExprScope source_location_scope;
   unsigned next_local = 0;
   Semantics(ASTContext &context, IdentityIndex *index, SemanticCache &memo)
       : ctx(context), identities(index), cache(memo) {}
@@ -103,6 +106,57 @@ struct Semantics : RecursiveASTVisitor<Semantics> {
   void item(const std::string &value) {
     const auto stable = normalized(value);
     out << stable.size() << ':' << stable << ';';
+  }
+  // Source-location builtin results can be integers, string pointers, or a
+  // pointer to Clang's synthesized source_location::__impl constant. Compare
+  // contents rather than AST addresses or the synthesized declaration's name.
+  bool source_location_value(const APValue &value) {
+    item("source-location-value:" + std::to_string(value.getKind()));
+    if (value.isInt()) {
+      llvm::SmallString<40> text;
+      value.getInt().toString(text, 10);
+      item(text.str().str());
+      return true;
+    }
+    if (value.isLValue()) {
+      item(std::to_string(value.getLValueOffset().getQuantity()));
+      const auto base = value.getLValueBase();
+      if (const auto *expr = base.dyn_cast<const Expr *>()) {
+        if (const auto *literal = dyn_cast<StringLiteral>(expr)) {
+          item(literal->getBytes().str());
+          return true;
+        }
+      }
+      if (const auto *decl = base.dyn_cast<const ValueDecl *>())
+        if (const auto *constant = dyn_cast<UnnamedGlobalConstantDecl>(decl))
+          return source_location_value(constant->getValue());
+      return false;
+    }
+    if (value.isStruct()) {
+      item(std::to_string(value.getStructNumBases()));
+      item(std::to_string(value.getStructNumFields()));
+      for (unsigned i = 0; i < value.getStructNumBases(); ++i)
+        if (!source_location_value(value.getStructBase(i))) return false;
+      for (unsigned i = 0; i < value.getStructNumFields(); ++i)
+        if (!source_location_value(value.getStructField(i))) return false;
+      return true;
+    }
+    return false;
+  }
+  void source_location_fallback(const SourceLocExpr *expr) {
+    auto location = expr->getLocation();
+    if (const auto *used = dyn_cast_or_null<CXXDefaultArgExpr>(source_location_scope.getDefaultExpr()))
+      location = used->getUsedLocation();
+    else if (const auto *initializer = dyn_cast_or_null<CXXDefaultInitExpr>(source_location_scope.getDefaultExpr()))
+      location = initializer->getUsedLocation();
+    const auto &manager = ctx.getSourceManager();
+    const auto presumed = manager.getPresumedLoc(manager.getExpansionRange(location).getEnd());
+    item("unresolved-source-location");
+    if (presumed.isValid()) {
+      item(presumed.getFilename());
+      item(std::to_string(presumed.getLine()));
+      item(std::to_string(presumed.getColumn()));
+    }
   }
   std::string template_argument(const TemplateArgument &argument) {
     switch (argument.getKind()) {
@@ -304,7 +358,7 @@ struct Semantics : RecursiveASTVisitor<Semantics> {
     // Explicit semantic vocabulary: unknown nodes cause a conservative skip.
     switch (stmt->getStmtClass()) {
 #define SH_NODE(name) case Stmt::name##Class:
-      SH_NODE(CompoundStmt)
+      SH_NODE(CompoundStmt) SH_NODE(SourceLocExpr)
       SH_NODE(CXXNewExpr) SH_NODE(CXXDeleteExpr) SH_NODE(LambdaExpr)
       SH_NODE(CXXRewrittenBinaryOperator)
       SH_NODE(DeclStmt)
@@ -355,6 +409,14 @@ struct Semantics : RecursiveASTVisitor<Semantics> {
             expr->getFPFeaturesInEffect(ctx.getLangOpts()).getAsOpaqueInt()));
       if (expr->isTypeDependent() || expr->isValueDependent())
         unsupported = "dependent_expression";
+    }
+    if (const auto *location = dyn_cast<SourceLocExpr>(stmt)) {
+      item(location->getBuiltinStr().str());
+      if (location->isValueDependent() ||
+          !source_location_value(location->EvaluateInContext(ctx, source_location_scope.getDefaultExpr()))) {
+        unsupported = "unsupported_source_location_value";
+        source_location_fallback(location);
+      }
     }
     if (const auto *reference = dyn_cast<DeclRefExpr>(stmt))
       item(identity(reference->getDecl()));
@@ -463,11 +525,33 @@ struct Semantics : RecursiveASTVisitor<Semantics> {
     return true;
   }
 
+  bool TraverseInitListExpr(InitListExpr *expr) {
+    // The default visitor sees only the written list and misses implicit member
+    // initializers. Use the resolved list once, including CXXDefaultInitExpr use
+    // contexts, instead of visiting both syntactic and semantic forms.
+    if (auto *semantic = expr->getSemanticForm()) expr = semantic;
+    VisitStmt(expr);
+    const auto *filler = expr->getArrayFiller();
+    bool filler_seen = false;
+    for (auto *child : expr->children()) {
+      filler_seen = filler_seen || child == filler;
+      if (!TraverseStmt(child)) return false;
+    }
+    // Implicit array elements can contain default member initializers too, but
+    // the semantic list's children() range does not include its array filler.
+    if (filler && !filler_seen) {
+      item("array-filler");
+      if (!TraverseStmt(expr->getArrayFiller())) return false;
+    }
+    return true;
+  }
   bool TraverseCXXDefaultArgExpr(CXXDefaultArgExpr *expr) {
+    CurrentSourceLocExprScope::SourceLocExprScopeGuard guard(expr, source_location_scope);
     VisitStmt(expr);
     return TraverseStmt(expr->getExpr());
   }
   bool TraverseCXXDefaultInitExpr(CXXDefaultInitExpr *expr) {
+    CurrentSourceLocExprScope::SourceLocExprScopeGuard guard(expr, source_location_scope);
     VisitStmt(expr);
     return TraverseStmt(expr->getExpr());
   }

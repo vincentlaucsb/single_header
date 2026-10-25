@@ -37,3 +37,17 @@ try { & ([scriptblock]::Create($script)) } catch {
   $rejected = $true
 }
 if (-not $rejected) { throw "Invalid action boolean was accepted" }
+
+$env:INPUT_DEDUPLICATE_INCLUDES = ""
+$env:INPUT_ALLOW_MIXED_INCLUDE = ""
+$env:INPUT_MERGE_NAMESPACES = "true"
+Check-Forwarding "" "" @("--config", "configured.json", "--merge-namespaces")
+$env:INPUT_MERGE_NAMESPACES = "false"
+Check-Forwarding "" "" @("--config", "configured.json", "--no-merge-namespaces")
+$env:INPUT_MERGE_NAMESPACES = "invalid"
+$rejected = $false
+try { & ([scriptblock]::Create($script)) } catch {
+  if ($_.Exception.Message -notlike '*merge-namespaces expects true or false*') { throw }
+  $rejected = $true
+}
+if (-not $rejected) { throw "Invalid namespace action boolean was accepted" }

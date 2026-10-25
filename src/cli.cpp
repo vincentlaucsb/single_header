@@ -29,6 +29,7 @@ struct CliOptions {
   bool report_set = false;
   bool annotations_set = false;
   bool deduplicate_includes_set = false;
+  bool merge_namespaces_set = false;
   bool include_guard_set = false;
   bool allow_mixed_includes_set = false;
 };
@@ -66,6 +67,8 @@ CliOptions parse_cli_args(int argc, char **argv) {
     const std::string arg = argv[i];
     if (arg == "--help" || arg == "-h") {
       cli.options.show_help = true;
+    } else if (arg == "--version") {
+      cli.options.show_version = true;
     } else if (arg == "--config") {
       cli.config_path = require_value(&i, arg);
       cli.config_set = true;
@@ -102,6 +105,9 @@ CliOptions parse_cli_args(int argc, char **argv) {
     } else if (arg == "--deduplicate-includes" || arg == "--no-deduplicate-includes") {
       cli.options.deduplicate_includes = arg == "--deduplicate-includes";
       cli.deduplicate_includes_set = true;
+    } else if (arg == "--merge-namespaces" || arg == "--no-merge-namespaces") {
+      cli.options.merge_namespaces = arg == "--merge-namespaces";
+      cli.merge_namespaces_set = true;
     } else if (arg == "--include-guard") {
       cli.options.include_guard = require_value(&i, arg);
       cli.include_guard_set = true;
@@ -148,6 +154,9 @@ Options:
   --include-guard <macro>        Outer guard name required by --deduplicate-includes.
   --allow-mixed-include <operand> Waive mixed guarded/unguarded audit for one literal
                                 operand, e.g. '<thread>'. Still hoists; may be repeated.
+  --merge-namespaces            Merge adjacent ordinary named namespaces recursively.
+                                Opt-in; review external structural macros before enabling.
+  --no-merge-namespaces         Disable namespace merging, overriding JSON configuration.
   --function-stitching <mode>    off (default), free, methods, or all. Requires Clang build.
   --compilation-database <path>  compile_commands.json or its directory; one command per source.
   --frontend-arg <argument>      Complete Clang frontend arguments instead of a database.
@@ -156,12 +165,13 @@ Options:
   --inline-annotation <name>     Allow a named object macro expanding to empty or inline.
                                 May be repeated; other signature macros are skipped.
   --help                         Show this help.
+  --version                      Show the generator version.
 )";
 }
 
 Options parse_args(int argc, char **argv) {
   const auto cli = parse_cli_args(argc, argv);
-  if (cli.options.show_help) {
+  if (cli.options.show_help || cli.options.show_version) {
     return cli.options;
   }
 
@@ -205,6 +215,7 @@ Options parse_args(int argc, char **argv) {
   if (cli.report_set) options.stitching_report = cli.options.stitching_report;
   if (cli.annotations_set) options.inline_annotations = cli.options.inline_annotations;
   if (cli.deduplicate_includes_set) options.deduplicate_includes = cli.options.deduplicate_includes;
+  if (cli.merge_namespaces_set) options.merge_namespaces = cli.options.merge_namespaces;
   if (cli.include_guard_set) options.include_guard = cli.options.include_guard;
   if (cli.allow_mixed_includes_set) options.allow_mixed_includes = cli.options.allow_mixed_includes;
 

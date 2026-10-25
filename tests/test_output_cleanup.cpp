@@ -283,3 +283,144 @@ TEST_CASE("mixed-include audit distinguishes literal identities and ignores only
   CHECK_THROWS_WITH(cleanup_output(source, true, "IDENTITY_GUARD", {"thread"}),
                     Catch::Matchers::ContainsSubstring("including delimiters"));
 }
+
+
+namespace {
+std::string merge_namespaces(std::string_view source) {
+  return cleanup_output(source, false, {}, {}, true);
+}
+std::size_t occurrences(std::string_view source, std::string_view word) {
+  std::size_t count = 0;
+  for (auto offset = source.find(word); offset != std::string_view::npos; offset = source.find(word, offset + word.size())) ++count;
+  return count;
+}
+} // namespace
+
+TEST_CASE("namespace merging defaults off and merges long adjacent chains when enabled", "[cleanup][namespaces]") {
+  const std::string pair = "namespace ordinary { int first; } namespace ordinary { int second; }\n";
+  CHECK(cleanup_output(pair) == pair);
+  CHECK(merge_namespaces(pair) == "namespace ordinary { int first;     int second; }\n");
+  std::string chain;
+  for (int i = 0; i < 256; ++i) chain += "namespace chain { int value" + std::to_string(i) + "; }\n";
+  const auto output = merge_namespaces(chain);
+  CHECK(occurrences(output, "namespace chain") == 1);
+  CHECK(occurrences(output, ";") == 256);
+  CHECK(merge_namespaces(output) == output);
+}
+
+TEST_CASE("namespace merging recursively exposes inner siblings beyond two passes", "[cleanup][namespaces]") {
+  const std::string source = "namespace outer { namespace middle { namespace inner { namespace leaf { int first; } } } }\n"
+      "namespace outer { namespace middle { namespace inner { namespace leaf { int second; } } } }\n"
+      "namespace outer { namespace middle { namespace inner { namespace leaf { int third; } } } }\n";
+  const auto output = merge_namespaces(source);
+  for (const auto *name : {"outer", "middle", "inner", "leaf"})
+    CHECK(occurrences(output, std::string("namespace ") + name) == 1);
+  CHECK(output.find("int first;") < output.find("int second;"));
+  CHECK(output.find("int second;") < output.find("int third;"));
+  CHECK(merge_namespaces(output) == output);
+  std::string deeply_nested;
+  for (int copy = 0; copy < 2; ++copy) {
+    for (int depth = 0; depth < 64; ++depth) deeply_nested += "namespace level" + std::to_string(depth) + " { ";
+    deeply_nested += "int value" + std::to_string(copy) + "; ";
+    deeply_nested.append(64, '}');
+  }
+  const auto deep_output = merge_namespaces(deeply_nested);
+  CHECK(occurrences(deep_output, "namespace level") == 64);
+  CHECK(merge_namespaces(deep_output) == deep_output);
+}
+
+TEST_CASE("namespace merging respects actual sibling adjacency and parent identities", "[cleanup][namespaces]") {
+  const std::string source = "namespace one { namespace detail { int first; } }\n"
+      "namespace two { namespace detail { int second; } }\n"
+      "namespace one { int third; } int barrier; namespace one { int fourth; }\n"
+      "namespace one { int fifth; }\n";
+  const auto output = merge_namespaces(source);
+  CHECK(occurrences(output, "namespace detail") == 2);
+  CHECK(occurrences(output, "namespace one") == 3);
+  CHECK(output.find("int barrier; namespace one { int fourth; \n   int fifth;") != std::string::npos);
+  const std::string unsupported = "namespace a::b { int first; } namespace a::b { int second; }\n"
+      "inline namespace exposed { int third; } inline namespace exposed { int fourth; }\n"
+      "namespace annotated [[deprecated]] { int fifth; } namespace annotated [[deprecated]] { int sixth; }\n"
+      "namespace named {} namespace alias = named; namespace named {}\n"
+      "namespace { int hidden; } namespace { int other; }\n";
+  CHECK(merge_namespaces(unsupported) == unsupported);
+}
+
+TEST_CASE("namespace merging preserves licensing and boundary comments byte for byte", "[cleanup][namespaces]") {
+  const std::string source = "namespace /* opening */ api { int first; } // namespace api\n"
+      "/* Copyright 2026 Example; SPDX-License-Identifier: MIT */\n"
+      "namespace /* rationale */ api /* retained */ { int second; }\n";
+  const auto output = merge_namespaces(source);
+  CHECK(output == "namespace /* opening */ api { int first;  // namespace api\n"
+      "/* Copyright 2026 Example; SPDX-License-Identifier: MIT */\n"
+      " /* rationale */  /* retained */  int second; }\n");
+  CHECK(merge_namespaces(output) == output);
+}
+
+TEST_CASE("namespace recognition ignores literal comments numbers and line-spliced spellings", "[cleanup][namespaces]") {
+  const std::string source = R"fixture(namespace lexical {
+const char *raw = u8R"tag(} namespace lexical { /*
+#define FAKE }
+)tag";
+const char *ordinary = "} namespace lexical { \\\"";
+char apostrophe = '\'';
+const wchar_t *wide = L"} namespace lexical {";
+char32_t unicode = U'}';
+int digits = 1'000 + 0xCA'FE;
+/* } namespace lexical { */
+} // continued boundary comment \
+namespace fake { }
+name\
+space lex\
+ical { int last; }
+)fixture";
+  const auto output = merge_namespaces(source);
+  CHECK(occurrences(output, "int last;") == 1);
+  CHECK(output.find("name\\\nspace lex\\\nical") == std::string::npos);
+  CHECK(output.find("namespace fake { }") != std::string::npos);
+  CHECK(output.find("#define FAKE }") != std::string::npos);
+  CHECK(output.find("1'000 + 0xCA'FE") != std::string::npos);
+  CHECK(output.find("/* } namespace lexical { */") != std::string::npos);
+  CHECK(merge_namespaces(output) == output);
+  const std::string digraph = "namespace a <% int first; %> namespace a <% int second; %>\n";
+  CHECK(merge_namespaces(digraph) == digraph);
+}
+
+TEST_CASE("namespace merging treats directives and hidden structural macros as barriers", "[cleanup][namespaces]") {
+  const std::vector<std::string> sources = {
+    "namespace api { int first; }\n#if FEATURE\nnamespace api { int second; }\n#endif\n",
+    "namespace api { int first; }\n#define MODE 1\nnamespace api { int second; }\n",
+    "namespace api {\n#if FEATURE\nint first;\n#endif\n} namespace api { int second; }\n",
+    "#define SPLIT int marker; } namespace other { int\nnamespace api { SPLIT moved; } namespace api { int retained; }\n",
+    "#define EXTERNAL_ALIAS EXTERNAL_STRUCTURAL\nnamespace api { EXTERNAL_ALIAS int first; } namespace api { int second; }\n",
+    "#define name other\nnamespace name { int first; } namespace name { int second; }\n",
+    "#define NAME inner {} } namespace other { namespace inner\nnamespace api { namespace NAME {} } namespace api { int second; }\n",
+    "#define namespace static_assert(__COUNTER__ < 100); namespace\nnamespace api { int first; } namespace api { int second; }\n#undef namespace\nint count() { return __COUNTER__; }\n",
+    "#define int static_assert(true); } namespace other { int\nnamespace api { int moved; } namespace api { long retained; }\n",
+    "#define alias int\n#define int static_assert(true); } namespace other { int\nnamespace api { alias moved; } namespace api { long retained; }\n",
+    "#define LOOP LOOP\nnamespace api { LOOP int first; } namespace api { int second; }\n",
+    "#define CALL(x) x\nnamespace api { CALL(int first;) } namespace api { int second; }\n",
+    "namespace api { TYPE moved; } namespace api { int retained; }\n",
+    "namespace api { external_boundary() int first; } namespace api { int second; }\n",
+    "namespace api { external_boundary } namespace api { int second; }\n"
+  };
+  for (const auto &source : sources) { INFO(source); CHECK(merge_namespaces(source) == source); }
+  const std::string harmless = "#define STORAGE inline\n#define VALUE 7\n#define ALIAS VALUE\n"
+      "namespace api { STORAGE int value() { return ALIAS; } } namespace api { int other; }\n";
+  CHECK(occurrences(merge_namespaces(harmless), "namespace api") == 1);
+  const std::string declarations = "namespace api { struct Item { int value; }; using Count = int; "
+      "int first(int input) { return input; } } namespace api { "
+      "Item item; Count count; int second() { return first(item.value); } }\n";
+  CHECK(occurrences(merge_namespaces(declarations), "namespace api") == 1);
+}
+
+TEST_CASE("namespace merging runs after include hoisting and before blank collapse", "[cleanup][namespaces][includes]") {
+  const std::string source = "#ifndef MERGE_GUARD\n#define MERGE_GUARD\nnamespace api { int first; }\n"
+      "#include <cstddef>\n\n\nnamespace api { int second; }\n#endif\n";
+  CHECK(occurrences(merge_namespaces(source), "namespace api") == 2);
+  const auto output = cleanup_output(source, true, "MERGE_GUARD", {}, true);
+  CHECK(occurrences(output, "namespace api") == 1);
+  CHECK(output.find("#define MERGE_GUARD\n#include <cstddef>\n") != std::string::npos);
+  CHECK(output.find("\n\n\n") == std::string::npos);
+  CHECK(cleanup_output(output, true, "MERGE_GUARD", {}, true) == output);
+}

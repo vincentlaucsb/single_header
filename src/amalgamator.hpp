@@ -1,4 +1,4 @@
-// single_header 0.1.0
+// single_header
 // Copyright (c) 2026 Vincent La
 // SPDX-License-Identifier: MIT
 
@@ -24,10 +24,12 @@ struct Options {
   std::filesystem::path stitching_report;
   std::vector<std::string> inline_annotations;
   bool deduplicate_includes = false;
+  bool merge_namespaces = false;
   std::string include_guard;
   std::vector<std::string> allow_mixed_includes;
   std::filesystem::path config_file;
   bool show_help = false;
+  bool show_version = false;
 };
 
 std::string generate(const Options &options);

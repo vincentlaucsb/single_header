@@ -1,0 +1,5 @@
+#pragma once
+
+namespace single_header {
+inline constexpr const char *version = "@PROJECT_VERSION@";
+} // namespace single_header

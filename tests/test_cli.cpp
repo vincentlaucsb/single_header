@@ -1,5 +1,14 @@
 #include "test_support.hpp"
 
+TEST_CASE("version uses the project version without loading configuration", "[version]") {
+  const auto result = run_result(quote(tool_path()) + " --version --config " +
+      quote(output_dir() / "nonexistent-config.json"));
+  CHECK(result.status == 0);
+  const std::string line = "single_header " SINGLE_HEADER_TEST_VERSION;
+  CHECK((result.out == line + "\n" || result.out == line + "\r\n"));
+  CHECK(result.error.empty());
+}
+
 TEST_CASE("generates golden output for a small fake library", "[golden]") {
   expect_golden("simple");
 }
@@ -235,4 +244,56 @@ TEST_CASE("mixed-include waivers override JSON and audit failures preserve exist
   CHECK(invalid.status != 0);
   CHECK(invalid.error.find("allowMixedIncludes") != std::string::npos);
   CHECK(invalid.error.find("array of strings") != std::string::npos);
+}
+
+
+TEST_CASE("namespace merging JSON and CLI overrides preserve macro-boundary runtime binding", "[cleanup][namespaces][runtime][config]") {
+  const auto work = output_dir() / "namespace_options";
+  const auto include = work / "include";
+  const auto output = work / "generated.hpp";
+  fs::remove_all(work);
+  fs::create_directories(include);
+  const std::string input = "#pragma once\nnamespace api { namespace detail { namespace leaf { inline int first() { return 3; } } } }\n"
+      "namespace api { namespace detail { namespace leaf { inline int second() { return first() + 4; } } } }\n"
+      "#define SPLIT int marker; } namespace other { int\n"
+      "namespace original { SPLIT moved = 5; } namespace original { inline int answer() { return 7; } }\n"
+      "#undef SPLIT\n";
+  write_text(include / "api.hpp", input);
+  const auto config = work / "settings.json";
+  nlohmann::json settings = {{"includeRoots", {include.generic_string()}}, {"output", output.generic_string()}};
+  const auto command = quote(tool_path()) + " --config " + quote(config);
+  write_text(config, settings.dump());
+  run_command(command);
+  const auto unmerged = read_text(output);
+  CHECK(unmerged.find("namespace api", unmerged.find("namespace api") + 1) != std::string::npos);
+  settings["mergeNamespaces"] = true;
+  write_text(config, settings.dump());
+  run_command(command);
+  const auto merged = read_text(output);
+  CHECK(merged.find("namespace api", merged.find("namespace api") + 1) == std::string::npos);
+  CHECK(merged.find("namespace original { SPLIT moved = 5; } namespace original {") != std::string::npos);
+  run_command(command + " --no-merge-namespaces");
+  CHECK(read_text(output) == unmerged);
+  settings["mergeNamespaces"] = false;
+  write_text(config, settings.dump());
+  run_command(command + " --merge-namespaces");
+  CHECK(read_text(output) == merged);
+  settings["mergeNamespaces"] = "true";
+  write_text(config, settings.dump());
+  const auto invalid = run_result(command);
+  CHECK(invalid.status != 0);
+  CHECK(invalid.error.find("mergeNamespaces") != std::string::npos);
+  CHECK(invalid.error.find("must be a boolean") != std::string::npos);
+
+  const auto project = work / "consumer";
+  write_text(project / "main.cpp", "#include \"generated.hpp\"\n"
+      "int main() { return api::detail::leaf::second() == 7 && other::moved == 5 && original::answer() == 7 ? 0 : 1; }\n");
+  write_text(project / "CMakeLists.txt", "cmake_minimum_required(VERSION 3.20)\nproject(namespace_consumer LANGUAGES CXX)\n"
+      "add_executable(consumer main.cpp)\ntarget_compile_features(consumer PRIVATE cxx_std_17)\n"
+      "target_include_directories(consumer PRIVATE \"" + work.generic_string() + "\")\n"
+      "enable_testing()\nadd_test(NAME runtime COMMAND consumer)\n");
+  run_command(quote(cmake_command()) + " -S " + quote(project) + " -B " + quote(work / "build") +
+      " -DCMAKE_BUILD_TYPE=Release -G " + quote_value(cmake_generator()));
+  run_command(quote(cmake_command()) + " --build " + quote(work / "build") + " --config Release");
+  run_command(quote(cmake_command()) + " -E chdir " + quote(work / "build") + " ctest -C Release --output-on-failure");
 }

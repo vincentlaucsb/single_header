@@ -1,0 +1,17 @@
+# Adjacent namespace cleanup
+
+`--merge-namespaces` (JSON `"mergeNamespaces": true`, Action input `merge-namespaces: true`) enables optional final-text cleanup. It defaults off. `--no-merge-namespaces` overrides JSON configuration.
+
+The cleanup runs after optional include hoisting and documentation metadata removal, before blank-line collapse. Both lightweight generation and compiler-backed stitching use the same renderer, including baseline/trial/final validation and byte reports. A stitched baseline already contains this cleanup; stitching validation does not independently prove the cleanup equivalent to the original unmerged source.
+
+Ordinary single-component named namespace definitions merge only when their closing/opening tokens are adjacent apart from whitespace or comments, have the same literal name, and occupy the same parsed parent scope. Declarations retain their order. Comments, including licenses and namespace labels, retain their bytes. A cached token adjacency queue processes newly exposed child boundaries until no more can be removed, so merging outer scopes exposes nested sibling merges at arbitrary depth. The source is structurally scanned once; no fixed pass count or repeated whole-file reparsing is used.
+
+Compact C++17 `namespace a::b`, anonymous namespaces, inline namespaces, attributed namespace definitions, and namespace aliases remain unchanged. The pass does not move declarations across other declarations or preprocessor directives. A directive inside a candidate body also prevents merging that candidate. Literal strings, raw strings, character literals, digit separators, comments, line splices, and alternative brace tokens are lexed structurally rather than matched by regular expression.
+
+## Macro limitations
+
+This is a conservative text transformation, not a preprocessor or a C++ equivalence proof. Enable it only after checking the project's macro conventions, including macros supplied through external headers and compiler arguments. Arbitrary externally defined macros cannot be inferred from the assembled text and may change namespace names or generate braces even at an ordinary declaration position. Lowercase external declaration macros are a particular unsupported case. An opt-in cannot substitute for that review.
+
+Known macro definitions are considered across the whole assembled text, including conditional/later redefinitions. Uses of macros containing structural tokens, function-like macros, token pasting, unresolved aliases, and alias cycles prevent merging enclosing namespace blocks. Simple object macros expanding only to literal/punctuation/keyword tokens or proven harmless aliases can be used. Macro-looking all-capital identifiers are conservatively rejected even in declaration positions such as `TYPE value;`. Bare unknown identifiers and macro-like calls at namespace declaration positions are also barriers. Namespace names referring to known macros or all-capital identifiers are skipped. A locally defined macro named `namespace` disables the entire pass, and structural macro definitions with other keyword names also act as barriers.
+
+These rules intentionally skip some valid C++ (for example template parameter `T` in a body) rather than try to expand macros. They cannot detect every possible external macro. Review generated output and compile/runtime checks when opting in; leave merging disabled for projects whose structural macros cannot be audited.

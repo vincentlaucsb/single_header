@@ -36,7 +36,8 @@ This explicit reordering assumes dependencies suitable for inclusion before thei
 original code, scope, and macro settings; it is not a compiler-equivalence claim.
 See the [README](../README.md) for complete include-pass behavior. Each unstitched
 baseline, stitched trial, and final render uses the same optional audit/include pass,
-automatic metadata cleanup, and final blank-line collapse. Consequently compiler
+automatic metadata cleanup, optional [namespace merging](namespace-merging.md),
+and final blank-line collapse. Consequently compiler
 checks and report sizes describe the exact bytes written, including postprocessing.
 
 The implementation lives in `src/stitching/`: `engine.cpp` coordinates discovery,
@@ -197,6 +198,10 @@ Unstitched generated bodies and declaration records are compared for each trial
 batch, including residual code, and the final accepted batch is freshly checked
 again. Comparison checks both directions: added and missing recorded definitions
 or declarations also reject relocation.
+Source-location builtins contribute their evaluated values, including residual
+bodies, defaults, field/variable initializers, and default-expression call contexts.
+A neighboring edit that changes those values is rejected even when the builtin's
+tokens and AST shape remain unchanged.
 Unknown constructs prevent candidate acceptance. Delayed, uninstantiated template
 bodies do not supply a semantic record and remain outside the transformation
 guarantee. This is a bounded source-relocation check for its declared vocabulary,
@@ -329,6 +334,14 @@ assertions), the 500,000-row dual-path runtime check, and exception-enabled and
 compiler-disabled-exception smoke tests on the preserved hoisted artifact. Its
 matching unstitched control passed the same four runtime groups. The remaining
 skips retain their source implementations and explicit reasons in the report.
+
+The optional namespace pass was then measured on that preserved 670,773-byte
+artifact. It removed three nested adjacent namespace boundaries, yielding
+670,690 bytes (83 additional bytes saved) in 80 ms external wall time. A no-merge
+control was byte-identical to the input. Both MSVC and Clang consumers passed
+the same four runtime groups on the namespace-cleaned output. This isolated
+postprocessing measurement does not rerun stitching or bypass the current
+mixed-include audit on the original sources.
 
 The original-to-unstitched report identifies a preexisting collation difference:
 the `CSV_NON_NULL(2)`
