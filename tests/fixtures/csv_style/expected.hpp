@@ -7,12 +7,10 @@ namespace csv {
 using size_type = std::size_t;
 }
 
-
 namespace csv {
 CSV_INLINE size_type row_size() { return 3; }
 int parsed_rows();
 }
-
 
 namespace csv {
 CSV_INLINE int version() { return 1; }
@@ -26,5 +24,4 @@ int parsed_rows() {
   return static_cast<int>(rows.size());
 }
 }
-
 

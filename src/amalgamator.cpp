@@ -1,10 +1,13 @@
 #include "amalgamator.hpp"
 
 #include "helpers.hpp"
+#include "output_cleanup.hpp"
+#include "stitching.hpp"
 
 #include <algorithm>
 #include <filesystem>
 #include <functional>
+#include <sstream>
 #include <regex>
 #include <stdexcept>
 #include <string>
@@ -20,6 +23,19 @@ struct FileSet {
   std::vector<fs::path> headers;
   std::vector<fs::path> sources;
 };
+
+std::vector<std::string> input_lines(const fs::path &path, const SourceOverrides &overrides) {
+  const auto found = overrides.find(path.generic_string());
+  if (found == overrides.end()) return read_lines(path);
+  std::vector<std::string> lines;
+  std::istringstream input(found->second);
+  std::string line;
+  while (std::getline(input, line)) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    lines.push_back(line + '\n');
+  }
+  return lines;
+}
 
 std::string trim_define_line(const std::string &line,
                              const std::vector<std::pair<std::string, std::string>> &rewrites) {
@@ -200,9 +216,10 @@ std::vector<fs::path> order_headers(const std::vector<fs::path> &headers,
 }
 
 std::string strip_source_file(const fs::path &path,
-                              const std::vector<std::pair<std::string, std::string>> &rewrites) {
+                              const std::vector<std::pair<std::string, std::string>> &rewrites,
+                              const SourceOverrides &overrides) {
   std::string output;
-  for (auto line : read_lines(path)) {
+  for (auto line : input_lines(path, overrides)) {
     std::string included;
     if (parse_system_include(line, &included)) {
       output += trim_define_line(line, rewrites);
@@ -225,10 +242,11 @@ std::string process_header_file(const fs::path &path,
                                 const std::vector<fs::path> &include_roots,
                                 std::unordered_set<std::string> *missing_includes,
                                 const std::string &splice_template,
-                                const std::vector<std::pair<std::string, std::string>> &rewrites) {
+                                const std::vector<std::pair<std::string, std::string>> &rewrites,
+                                const SourceOverrides &overrides) {
   std::string output;
 
-  for (auto line : read_lines(path)) {
+  for (auto line : input_lines(path, overrides)) {
     std::string included;
     if (parse_system_include(line, &included)) {
       const auto include_path =
@@ -269,7 +287,8 @@ std::string process_header_file(const fs::path &path,
 
 std::string collate_headers(std::vector<fs::path> headers,
                             const std::vector<fs::path> &include_roots,
-                            const std::vector<std::pair<std::string, std::string>> &rewrites) {
+                            const std::vector<std::pair<std::string, std::string>> &rewrites,
+                            const SourceOverrides &overrides) {
   std::reverse(headers.begin(), headers.end());
   const auto known = known_path_set(headers);
   const std::string splice_template = "__INSERT_HEADER_HERE__({})\n";
@@ -283,7 +302,7 @@ std::string collate_headers(std::vector<fs::path> headers,
     processed.insert(key);
 
     auto source = process_header_file(path, known, processed, include_roots,
-                                      &missing_includes, splice_template, rewrites);
+                                      &missing_includes, splice_template, rewrites, overrides);
     if (missing_includes.count(key)) {
       const auto splice_phrase = replace_all(splice_template, "{}", key);
       auto first = header_concat.find(splice_phrase);
@@ -301,10 +320,11 @@ std::string collate_headers(std::vector<fs::path> headers,
 }
 
 std::string collate_sources(const std::vector<fs::path> &sources,
-                            const std::vector<std::pair<std::string, std::string>> &rewrites) {
+                            const std::vector<std::pair<std::string, std::string>> &rewrites,
+                            const SourceOverrides &overrides) {
   std::string output;
   for (const auto &source : sources) {
-    output += strip_source_file(source, rewrites);
+    output += strip_source_file(source, rewrites, overrides);
     output += '\n';
   }
   return output;
@@ -313,26 +333,38 @@ std::string collate_sources(const std::vector<fs::path> &sources,
 } // namespace
 
 std::string generate(const Options &options) {
+  validate_stitching_options(options);
   auto files = scan_files(options.include_roots, options.source_patterns);
   if (!options.entry.empty()) {
     files.headers = reachable_headers(options.entry, files.headers, options.include_roots);
   }
   auto ordered_headers = order_headers(files.headers, options.include_roots);
-  auto header_concat = collate_headers(ordered_headers, options.include_roots,
-                                       options.macro_rewrites);
-  auto source_concat = collate_sources(files.sources, options.macro_rewrites);
+  const auto render = [&](const SourceOverrides &overrides) {
+    auto header_concat = collate_headers(ordered_headers, options.include_roots,
+                                         options.macro_rewrites, overrides);
+    auto source_concat = collate_sources(files.sources, options.macro_rewrites, overrides);
 
-  if (!options.implementation_marker.empty() &&
-      header_concat.find(options.implementation_marker) != std::string::npos) {
-    header_concat = replace_all(header_concat, options.implementation_marker, source_concat);
-  } else if (!source_concat.empty()) {
-    if (!header_concat.empty() && header_concat.back() != '\n') {
-      header_concat += '\n';
+    if (!options.implementation_marker.empty() &&
+        header_concat.find(options.implementation_marker) != std::string::npos) {
+      header_concat = replace_all(header_concat, options.implementation_marker, source_concat);
+    } else if (!source_concat.empty()) {
+      if (!header_concat.empty() && header_concat.back() != '\n') {
+        header_concat += '\n';
+      }
+      header_concat += source_concat;
     }
-    header_concat += source_concat;
-  }
 
-  return "#pragma once\n" + header_concat;
+    // Source overrides (including stitching edits) are assembled before either
+    // optional include hoisting or automatic metadata/blank-line cleanup. Every
+    // baseline, trial and final validation receives these exact rendered bytes.
+    return cleanup_output("#pragma once\n" + header_concat,
+                          options.deduplicate_includes, options.include_guard,
+                          options.allow_mixed_includes, options.merge_namespaces);
+  };
+  if (options.function_stitching != "off") {
+    return stitch_functions(options, files.headers, files.sources, render);
+  }
+  return render({});
 }
 
 } // namespace single_header

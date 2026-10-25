@@ -1,121 +1,13 @@
-#include <catch2/catch_test_macros.hpp>
+#include "test_support.hpp"
 
-#include <cstdlib>
-#include <filesystem>
-#include <fstream>
-#include <sstream>
-#include <stdexcept>
-#include <string>
-#include <vector>
-
-namespace fs = std::filesystem;
-
-namespace {
-
-fs::path tool_path() { return SINGLE_HEADER_TEST_TOOL; }
-fs::path fixture_dir() { return SINGLE_HEADER_TEST_FIXTURES; }
-fs::path output_dir() { return SINGLE_HEADER_TEST_OUTPUT_DIR; }
-fs::path cmake_command() { return SINGLE_HEADER_TEST_CMAKE_COMMAND; }
-std::string cmake_generator() { return SINGLE_HEADER_TEST_CMAKE_GENERATOR; }
-
-std::string quote(const fs::path &path) {
-  auto value = path.string();
-  std::string quoted = "\"";
-  for (char ch : value) {
-    if (ch == '"') {
-      quoted += "\\\"";
-    } else {
-      quoted += ch;
-    }
-  }
-  quoted += "\"";
-  return quoted;
+TEST_CASE("version uses the project version without loading configuration", "[version]") {
+  const auto result = run_result(quote(tool_path()) + " --version --config " +
+      quote(output_dir() / "nonexistent-config.json"));
+  CHECK(result.status == 0);
+  const std::string line = "single_header " SINGLE_HEADER_TEST_VERSION;
+  CHECK((result.out == line + "\n" || result.out == line + "\r\n"));
+  CHECK(result.error.empty());
 }
-
-std::string quote_value(const std::string &value) {
-  std::string quoted = "\"";
-  for (char ch : value) {
-    if (ch == '"') {
-      quoted += "\\\"";
-    } else {
-      quoted += ch;
-    }
-  }
-  quoted += "\"";
-  return quoted;
-}
-
-std::string json_string(const fs::path &path) {
-  return quote_value(path.generic_string());
-}
-
-std::string json_string_value(const std::string &value) {
-  return quote_value(value);
-}
-
-void write_text(const fs::path &path, const std::string &text);
-
-void run_command(const std::string &command) {
-  INFO(command);
-  static int command_index = 0;
-  const auto script_dir = output_dir() / "scripts";
-  fs::create_directories(script_dir);
-
-#ifdef _WIN32
-  const auto script = script_dir / ("command_" + std::to_string(command_index++) + ".cmd");
-  write_text(script, "@echo off\n" + command + "\n");
-  REQUIRE(std::system(("cmd /S /C " + quote(script)).c_str()) == 0);
-#else
-  const auto script = script_dir / ("command_" + std::to_string(command_index++) + ".sh");
-  write_text(script, "#!/usr/bin/env sh\nset -e\n" + command + "\n");
-  REQUIRE(std::system(("sh " + quote(script)).c_str()) == 0);
-#endif
-}
-
-void run_command_in_dir(const fs::path &working_dir, const std::string &command) {
-#ifdef _WIN32
-  run_command("cd /D " + quote(working_dir) + " && " + command);
-#else
-  run_command("cd " + quote(working_dir) + " && " + command);
-#endif
-}
-
-std::string read_text(const fs::path &path) {
-  std::ifstream input(path, std::ios::binary);
-  if (!input) {
-    throw std::runtime_error("failed to read " + path.string());
-  }
-  std::ostringstream buffer;
-  buffer << input.rdbuf();
-  return buffer.str();
-}
-
-void write_text(const fs::path &path, const std::string &text) {
-  fs::create_directories(path.parent_path());
-  std::ofstream output(path, std::ios::binary);
-  if (!output) {
-    throw std::runtime_error("failed to write " + path.string());
-  }
-  output << text;
-}
-
-void expect_golden(const std::string &fixture_name, const std::string &extra_args = {}) {
-  const auto fixture = fixture_dir() / fixture_name;
-  const auto output = output_dir() / (fixture_name + ".hpp");
-  fs::create_directories(output.parent_path());
-
-  auto command = quote(tool_path()) +
-                 " --include-root " + quote(fixture / "include") +
-                 " --output " + quote(output);
-  if (!extra_args.empty()) {
-    command += " " + extra_args;
-  }
-
-  run_command(command);
-  CHECK(read_text(output) == read_text(fixture / "expected.hpp"));
-}
-
-} // namespace
 
 TEST_CASE("generates golden output for a small fake library", "[golden]") {
   expect_golden("simple");
@@ -125,6 +17,27 @@ TEST_CASE("generates golden output for csv-parser style fixture", "[golden]") {
   expect_golden("csv_style",
                 "--rewrite-macro CSV_INLINE=inline --implementation-marker " +
                   quote_value("/** INSERT_CSV_SOURCES **/"));
+}
+
+TEST_CASE("known project headers deduplicate diamond quote and angle includes", "[cleanup][includes]") {
+  const auto work = output_dir() / "include_diamond";
+  const auto include = work / "include";
+  fs::create_directories(include);
+  write_text(include / "shared.hpp", "#pragma once\nstruct SharedDiamond { int value; };\n");
+  write_text(include / "left.hpp", "#pragma once\n#include \"shared.hpp\"\n");
+  write_text(include / "right.hpp", "#pragma once\n#include <shared.hpp>\n");
+  write_text(include / "api.hpp", "#pragma once\n#include \"left.hpp\"\n#include \"right.hpp\"\n"
+      "#include \"shared.hpp\"\n#include <shared.hpp>\n#include <vendor.hpp>\n#include <vendor.hpp>\n");
+  const auto output = work / "generated.hpp";
+  run_command(quote(tool_path()) + " --include-root " + quote(include) +
+              " --entry " + quote(include / "api.hpp") + " --output " + quote(output));
+  const auto text = read_text(output);
+  const auto marker = text.find("struct SharedDiamond");
+  REQUIRE(marker != std::string::npos);
+  CHECK(text.find("struct SharedDiamond", marker + 1) == std::string::npos);
+  CHECK(text.find("#include \"shared.hpp\"") == std::string::npos);
+  CHECK(text.find("#include <shared.hpp>") == std::string::npos);
+  CHECK(text.find("#include <vendor.hpp>\n#include <vendor.hpp>") != std::string::npos);
 }
 
 TEST_CASE("generated header compiles in multiple translation units", "[compile-smoke]") {
@@ -225,4 +138,162 @@ TEST_CASE("explicit CLI flags override JSON config values", "[config]") {
 
   CHECK_FALSE(fs::exists(config_output));
   CHECK(read_text(override_output) == read_text(fixture / "expected.hpp"));
+}
+
+TEST_CASE("explicit off overrides configured stitching and preserves legacy output", "[stitching][config]") {
+  const auto work = output_dir() / "off_override";
+  const auto fixture = fixture_dir() / "simple";
+  const auto config = work / "config.json";
+  write_text(config, nlohmann::json{{"includeRoots", { (fixture / "include").generic_string() }},
+      {"output", (work / "result.hpp").generic_string()}, {"functionStitching", "all"}}.dump());
+  run_command(quote(tool_path()) + " --config " + quote(config) + " --function-stitching off");
+  CHECK(read_text(work / "result.hpp") == read_text(fixture / "expected.hpp"));
+}
+
+TEST_CASE("stitching rejects invalid modes and unavailable compilation contexts", "[stitching][errors]") {
+  const auto args = quote(tool_path()) + " --include-root " + quote(fixture_dir() / "simple/include") +
+      " --output " + quote(output_dir() / "errors.hpp");
+  auto invalid = run_result(args + " --function-stitching automatic");
+  CHECK(invalid.status != 0); CHECK(invalid.error.find("expects off, free, methods, or all") != std::string::npos);
+  auto unavailable = run_result(args + " --function-stitching all");
+  CHECK(unavailable.status != 0);
+#ifdef SINGLE_HEADER_TEST_WITH_CLANG
+  CHECK(unavailable.error.find("requires exactly one") != std::string::npos);
+#else
+  CHECK(unavailable.error.find("SINGLE_HEADER_WITH_CLANG=ON") != std::string::npos);
+#endif
+}
+
+TEST_CASE("include hoisting CLI and JSON options override independently", "[config][includes]") {
+  const auto work = output_dir() / "include_options";
+  const auto include = work / "include";
+  const auto output = work / "result.hpp";
+  const auto config = work / "config.json";
+  write_text(include / "api.hpp", "#ifndef CONFIG_GUARD\n#define CONFIG_GUARD\n"
+      "int value;\n#include <vector>\n#include <vector>\n#endif\n");
+  auto settings = nlohmann::json{{"includeRoots", {include.generic_string()}},
+      {"output", output.generic_string()}, {"deduplicateIncludes", true}, {"includeGuard", "CONFIG_GUARD"}};
+  write_text(config, settings.dump());
+  const auto command = quote(tool_path()) + " --config " + quote(config);
+  run_command(command);
+  CHECK(read_text(output) == "#pragma once\n#ifndef CONFIG_GUARD\n#define CONFIG_GUARD\n"
+      "#include <vector>\nint value;\n#endif\n");
+  run_command(command + " --no-deduplicate-includes --include-guard IGNORED");
+  CHECK(read_text(output).find("int value;\n#include <vector>\n#include <vector>\n") != std::string::npos);
+  settings["deduplicateIncludes"] = false;
+  settings["includeGuard"] = "WRONG_GUARD";
+  write_text(config, settings.dump());
+  run_command(command + " --deduplicate-includes --include-guard CONFIG_GUARD");
+  CHECK(read_text(output).find("#define CONFIG_GUARD\n#include <vector>\nint value;") != std::string::npos);
+  auto wrong_guard = run_result(command + " --deduplicate-includes");
+  CHECK(wrong_guard.status != 0);
+  CHECK(wrong_guard.error.find("configured outer guard WRONG_GUARD") != std::string::npos);
+  settings["deduplicateIncludes"] = "true";
+  write_text(config, settings.dump());
+  auto invalid_boolean = run_result(command);
+  CHECK(invalid_boolean.status != 0);
+  CHECK(invalid_boolean.error.find("must be a boolean") != std::string::npos);
+  settings["deduplicateIncludes"] = true;
+  settings.erase("includeGuard");
+  write_text(config, settings.dump());
+  auto missing_guard = run_result(command);
+  CHECK(missing_guard.status != 0);
+  CHECK(missing_guard.error.find("--include-guard") != std::string::npos);
+}
+
+TEST_CASE("mixed-include waivers override JSON and audit failures preserve existing artifacts", "[config][includes][audit]") {
+  const auto work = output_dir() / "mixed_include_options";
+  const auto include = work / "include";
+  const auto output = work / "result.hpp";
+  const auto report = work / "report.json";
+  const auto config = work / "config.json";
+  write_text(include / "api.hpp", "#ifndef MIXED_CONFIG_GUARD\n#define MIXED_CONFIG_GUARD\n"
+      "int value;\n#include <thread>\n#include <vector>\n#if FEATURE\n#include <thread>\n#include <vector>\n#endif\n#endif\n");
+  auto settings = nlohmann::json{{"includeRoots", {include.generic_string()}},
+      {"output", output.generic_string()}, {"stitchingReport", report.generic_string()},
+      {"deduplicateIncludes", true}, {"includeGuard", "MIXED_CONFIG_GUARD"}};
+  write_text(config, settings.dump());
+  write_text(output, "output sentinel");
+  write_text(report, "report sentinel");
+  const auto command = quote(tool_path()) + " --config " + quote(config);
+  const auto strict = run_result(command);
+  CHECK(strict.status != 0);
+  CHECK(strict.error.find("<thread>: unguarded") != std::string::npos);
+  CHECK(strict.error.find("<vector>: unguarded") != std::string::npos);
+  CHECK(read_text(output) == "output sentinel");
+  CHECK(read_text(report) == "report sentinel");
+  settings["allowMixedIncludes"] = {"<thread>", "<vector>"};
+  write_text(config, settings.dump());
+  run_command(command);
+  const auto hoisted = read_text(output);
+  CHECK(hoisted == "#pragma once\n#ifndef MIXED_CONFIG_GUARD\n#define MIXED_CONFIG_GUARD\n"
+      "#include <thread>\n#include <vector>\nint value;\n#if FEATURE\n#endif\n#endif\n");
+  const auto overridden = run_result(command + " --allow-mixed-include " + quote_value("<thread>"));
+  CHECK(overridden.status != 0);
+  CHECK(overridden.error.find("<vector>: unguarded") != std::string::npos);
+  CHECK(overridden.error.find("<thread>: unguarded") == std::string::npos);
+  CHECK(read_text(output) == hoisted);
+  run_command(command + " --allow-mixed-include " + quote_value("<thread>") +
+      " --allow-mixed-include " + quote_value("<vector>"));
+  CHECK(read_text(output) == hoisted);
+  run_command(command + " --no-deduplicate-includes --allow-mixed-include " + quote_value("<unrelated>"));
+  CHECK(read_text(output).find("#if FEATURE\n#include <thread>\n#include <vector>") != std::string::npos);
+  settings["allowMixedIncludes"] = {42};
+  write_text(config, settings.dump());
+  const auto invalid = run_result(command);
+  CHECK(invalid.status != 0);
+  CHECK(invalid.error.find("allowMixedIncludes") != std::string::npos);
+  CHECK(invalid.error.find("array of strings") != std::string::npos);
+}
+
+
+TEST_CASE("namespace merging JSON and CLI overrides preserve macro-boundary runtime binding", "[cleanup][namespaces][runtime][config]") {
+  const auto work = output_dir() / "namespace_options";
+  const auto include = work / "include";
+  const auto output = work / "generated.hpp";
+  fs::remove_all(work);
+  fs::create_directories(include);
+  const std::string input = "#pragma once\nnamespace api { namespace detail { namespace leaf { inline int first() { return 3; } } } }\n"
+      "namespace api { namespace detail { namespace leaf { inline int second() { return first() + 4; } } } }\n"
+      "#define SPLIT int marker; } namespace other { int\n"
+      "namespace original { SPLIT moved = 5; } namespace original { inline int answer() { return 7; } }\n"
+      "#undef SPLIT\n";
+  write_text(include / "api.hpp", input);
+  const auto config = work / "settings.json";
+  nlohmann::json settings = {{"includeRoots", {include.generic_string()}}, {"output", output.generic_string()}};
+  const auto command = quote(tool_path()) + " --config " + quote(config);
+  write_text(config, settings.dump());
+  run_command(command);
+  const auto unmerged = read_text(output);
+  CHECK(unmerged.find("namespace api", unmerged.find("namespace api") + 1) != std::string::npos);
+  settings["mergeNamespaces"] = true;
+  write_text(config, settings.dump());
+  run_command(command);
+  const auto merged = read_text(output);
+  CHECK(merged.find("namespace api", merged.find("namespace api") + 1) == std::string::npos);
+  CHECK(merged.find("namespace original { SPLIT moved = 5; } namespace original {") != std::string::npos);
+  run_command(command + " --no-merge-namespaces");
+  CHECK(read_text(output) == unmerged);
+  settings["mergeNamespaces"] = false;
+  write_text(config, settings.dump());
+  run_command(command + " --merge-namespaces");
+  CHECK(read_text(output) == merged);
+  settings["mergeNamespaces"] = "true";
+  write_text(config, settings.dump());
+  const auto invalid = run_result(command);
+  CHECK(invalid.status != 0);
+  CHECK(invalid.error.find("mergeNamespaces") != std::string::npos);
+  CHECK(invalid.error.find("must be a boolean") != std::string::npos);
+
+  const auto project = work / "consumer";
+  write_text(project / "main.cpp", "#include \"generated.hpp\"\n"
+      "int main() { return api::detail::leaf::second() == 7 && other::moved == 5 && original::answer() == 7 ? 0 : 1; }\n");
+  write_text(project / "CMakeLists.txt", "cmake_minimum_required(VERSION 3.20)\nproject(namespace_consumer LANGUAGES CXX)\n"
+      "add_executable(consumer main.cpp)\ntarget_compile_features(consumer PRIVATE cxx_std_17)\n"
+      "target_include_directories(consumer PRIVATE \"" + work.generic_string() + "\")\n"
+      "enable_testing()\nadd_test(NAME runtime COMMAND consumer)\n");
+  run_command(quote(cmake_command()) + " -S " + quote(project) + " -B " + quote(work / "build") +
+      " -DCMAKE_BUILD_TYPE=Release -G " + quote_value(cmake_generator()));
+  run_command(quote(cmake_command()) + " --build " + quote(work / "build") + " --config Release");
+  run_command(quote(cmake_command()) + " -E chdir " + quote(work / "build") + " ctest -C Release --output-on-failure");
 }

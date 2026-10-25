@@ -7,8 +7,11 @@ branding:
   color: blue
 
 inputs:
+  executable:
+    description: Optional existing CLI executable (for a locally built Clang backend). Skips download.
+    required: false
   version:
-    description: Release tag containing the CLI binary. Defaults to the action ref, so use a release tag such as v0.1.0.
+    description: Release tag containing the CLI binary. Defaults to the action ref, so use a release tag such as v1.0.0.
     required: false
   repository:
     description: Repository to download release assets from. Defaults to this action repository.
@@ -31,9 +34,35 @@ inputs:
   implementation-marker:
     description: Marker replaced by stripped source text.
     required: false
-    default: "/** INSERT_CSV_SOURCES **/"
   entry:
     description: Optional top-level header path.
+    required: false
+  deduplicate-includes:
+    description: Optional true or false; hoist unguarded literal includes after include-guard and remove repeats. Omit to use JSON/default off.
+    required: false
+  include-guard:
+    description: Outer header guard macro name, required when include deduplication is enabled.
+    required: false
+  allow-mixed-include:
+    description: Literal include operands (including angle or quote delimiters), one per line; waive only the mixed-guard audit, still hoisting normally.
+    required: false
+  merge-namespaces:
+    description: Optional true or false; merge adjacent ordinary named namespaces recursively. Review external structural macros before enabling. Omit to use JSON/default off.
+    required: false
+  function-stitching:
+    description: Optional off, free, methods, or all. Requires a Clang-enabled executable for stitching.
+    required: false
+  compilation-database:
+    description: Optional compile_commands.json path or directory.
+    required: false
+  frontend-arg:
+    description: Complete Clang arguments, one argument per line, instead of a compilation database.
+    required: false
+  stitching-report:
+    description: Optional JSON report path, distinct from inputs and output.
+    required: false
+  inline-annotation:
+    description: Allowed empty/inline annotation macro names, one per line.
     required: false
   run:
     description: Set to false to install the CLI without running it.
@@ -42,7 +71,7 @@ inputs:
 
 outputs:
   executable:
-    description: Path to the downloaded single_header executable.
+    description: Path to the installed or supplied single_header executable.
     value: ${{ steps.install.outputs.executable }}
 
 runs:
@@ -53,6 +82,7 @@ runs:
       shell: pwsh
       env:
         INPUT_VERSION: ${{ inputs.version }}
+        INPUT_EXECUTABLE: ${{ inputs.executable }}
         INPUT_REPOSITORY: ${{ inputs.repository }}
         ACTION_REF: ${{ github.action_ref }}
         ACTION_REPOSITORY: ${{ github.action_repository }}
@@ -60,6 +90,12 @@ runs:
         RUNNER_ARCH_NAME: ${{ runner.arch }}
       run: |
         $ErrorActionPreference = "Stop"
+
+        if ($env:INPUT_EXECUTABLE) {
+          $existing = (Resolve-Path -LiteralPath $env:INPUT_EXECUTABLE).Path
+          "executable=$existing" >> $env:GITHUB_OUTPUT
+          exit 0
+        }
 
         $version = $env:INPUT_VERSION
         if (-not $version) {
@@ -136,6 +172,15 @@ runs:
         INPUT_REWRITE_MACRO: ${{ inputs.rewrite-macro }}
         INPUT_IMPLEMENTATION_MARKER: ${{ inputs.implementation-marker }}
         INPUT_ENTRY: ${{ inputs.entry }}
+        INPUT_DEDUPLICATE_INCLUDES: ${{ inputs.deduplicate-includes }}
+        INPUT_INCLUDE_GUARD: ${{ inputs.include-guard }}
+        INPUT_ALLOW_MIXED_INCLUDE: ${{ inputs.allow-mixed-include }}
+        INPUT_MERGE_NAMESPACES: ${{ inputs.merge-namespaces }}
+        INPUT_FUNCTION_STITCHING: ${{ inputs.function-stitching }}
+        INPUT_COMPILATION_DATABASE: ${{ inputs.compilation-database }}
+        INPUT_FRONTEND_ARG: ${{ inputs.frontend-arg }}
+        INPUT_STITCHING_REPORT: ${{ inputs.stitching-report }}
+        INPUT_INLINE_ANNOTATION: ${{ inputs.inline-annotation }}
       run: |
         $ErrorActionPreference = "Stop"
 
@@ -176,6 +221,35 @@ runs:
         }
         if ($env:INPUT_ENTRY) {
           $toolArgs += @("--entry", $env:INPUT_ENTRY)
+        }
+        if ($env:INPUT_DEDUPLICATE_INCLUDES) {
+          switch ($env:INPUT_DEDUPLICATE_INCLUDES) {
+            "true" { $toolArgs += "--deduplicate-includes" }
+            "false" { $toolArgs += "--no-deduplicate-includes" }
+            default { throw "deduplicate-includes expects true or false" }
+          }
+        }
+        if ($env:INPUT_INCLUDE_GUARD) {
+          $toolArgs += @("--include-guard", $env:INPUT_INCLUDE_GUARD)
+        }
+        $toolArgs = Add-MultilineArgs $toolArgs "--allow-mixed-include" $env:INPUT_ALLOW_MIXED_INCLUDE
+        if ($env:INPUT_MERGE_NAMESPACES) {
+          switch ($env:INPUT_MERGE_NAMESPACES) {
+            "true" { $toolArgs += "--merge-namespaces" }
+            "false" { $toolArgs += "--no-merge-namespaces" }
+            default { throw "merge-namespaces expects true or false" }
+          }
+        }
+        if ($env:INPUT_FUNCTION_STITCHING) {
+          $toolArgs += @("--function-stitching", $env:INPUT_FUNCTION_STITCHING)
+        }
+        if ($env:INPUT_COMPILATION_DATABASE) {
+          $toolArgs += @("--compilation-database", $env:INPUT_COMPILATION_DATABASE)
+        }
+        $toolArgs = Add-MultilineArgs $toolArgs "--frontend-arg" $env:INPUT_FRONTEND_ARG
+        $toolArgs = Add-MultilineArgs $toolArgs "--inline-annotation" $env:INPUT_INLINE_ANNOTATION
+        if ($env:INPUT_STITCHING_REPORT) {
+          $toolArgs += @("--stitching-report", $env:INPUT_STITCHING_REPORT)
         }
 
         & $env:SINGLE_HEADER_EXECUTABLE @toolArgs

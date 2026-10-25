@@ -1,6 +1,7 @@
 #include "amalgamator.hpp"
 #include "cli.hpp"
 #include "helpers.hpp"
+#include "version.hpp"
 
 #include <exception>
 #include <iostream>
@@ -10,6 +11,10 @@ int main(int argc, char **argv) {
     const auto options = single_header::parse_args(argc, argv);
     if (options.show_help) {
       std::cout << single_header::usage();
+      return 0;
+    }
+    if (options.show_version) {
+      std::cout << "single_header " << single_header::version << '\n';
       return 0;
     }
 

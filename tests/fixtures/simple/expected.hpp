@@ -5,7 +5,6 @@ namespace simple {
 inline int detail() { return 7; }
 }
 
-
 namespace simple {
 std::string name();
 inline int value() { return detail(); }
@@ -16,5 +15,4 @@ inline int value() { return detail(); }
 namespace simple {
 std::string name() { return "simple"; }
 }
-
 

@@ -43,9 +43,25 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
 
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Verify release version
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $entry = Get-Content -LiteralPath build/CMakeCache.txt |
+            Where-Object { $_ -match '^CMAKE_PROJECT_VERSION:STATIC=' }
+          if (@($entry).Count -ne 1) { throw "Missing configured project version" }
+          $version = $entry -replace '^CMAKE_PROJECT_VERSION:STATIC=', ''
+          if ($env:RELEASE_TAG -cnotin @($version, "v$version")) {
+            throw "Release tag '$env:RELEASE_TAG' does not match configured version '$version'"
+          }
 
       - name: Build
         run: cmake --build build --config Release --parallel
@@ -56,11 +72,10 @@ jobs:
       - name: Package
         id: package
         shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
         run: |
-          $tag = "${{ github.event.release.tag_name }}"
-          if (-not $tag) {
-            $tag = "${{ inputs.tag }}"
-          }
+          $tag = $env:RELEASE_TAG
           if (-not $tag) {
             throw "No release tag is available."
           }
@@ -72,6 +87,8 @@ jobs:
 
           Copy-Item -LiteralPath "${{ matrix.executable }}" -Destination (Join-Path $stage "${{ matrix.binary_name }}")
           Copy-Item -LiteralPath "README.md" -Destination $stage
+          Copy-Item -LiteralPath "CHANGELOG.md" -Destination $stage
+          Copy-Item -LiteralPath "docs" -Destination (Join-Path $stage "docs") -Recurse
 
           if ("${{ matrix.archive }}" -eq "zip") {
             $archive = Join-Path "dist" "$packageName.zip"

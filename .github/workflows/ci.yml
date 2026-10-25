@@ -24,3 +24,48 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build --build-config Release --output-on-failure
+
+  compiler-stitching:
+    name: Clang 20 backend / ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: GCC consumers
+            consumer: g++
+            flags: ""
+            unsanitized-sdk: "OFF"
+          - name: Clang consumers
+            consumer: clang++-20
+            flags: ""
+            unsanitized-sdk: "OFF"
+          - name: Clang ASan and UBSan
+            consumer: clang++-20
+            flags: "-fsanitize=address,undefined -fno-omit-frame-pointer"
+            unsanitized-sdk: "ON"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install LLVM 20 development libraries
+        run: |
+          wget -q https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 20
+          sudo apt-get install -y llvm-20-dev libclang-20-dev libclang-rt-20-dev ninja-build
+      - name: Configure optional backend
+        run: >-
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_CXX_COMPILER=${{ matrix.consumer }}
+          -DCMAKE_CXX_FLAGS="${{ matrix.flags }}"
+          -DSINGLE_HEADER_WITH_CLANG=ON
+          -DSINGLE_HEADER_CLANG_UNSANITIZED_SDK=${{ matrix.unsanitized-sdk }}
+          -DLLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm
+          -DClang_DIR=/usr/lib/llvm-20/lib/cmake/clang
+      - name: Build
+        run: cmake --build build --parallel 2
+      - name: Semantic, golden, link, and runtime tests
+        env:
+          CXX: ${{ matrix.consumer }}
+          CXXFLAGS: ${{ matrix.flags }}
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: ctest --test-dir build --output-on-failure --parallel 2
