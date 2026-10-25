@@ -4,7 +4,8 @@ The optional LLVM/Clang 20 backend moves supported source definitions to existin
 header declarations. `--function-stitching off|free|methods|all` defaults to `off`.
 The default build and release binaries retain the lightweight generator; requesting
 stitching from those binaries fails with build instructions. Explicit `off`
-overrides JSON configuration and follows the original generation path.
+overrides JSON configuration. It follows the lightweight generation path unless
+[automatic function inlining](inline-functions.md) is separately enabled.
 
 Both generation paths automatically collapse repeated ordinary blank lines and
 remove whole Doxygen block comments containing a real `@file` or `\file`
@@ -150,9 +151,24 @@ Signature macros are skipped. To explicitly allow an object macro whose expansio
 is empty or exactly `inline`, use `--inline-annotation CSV_INLINE` (repeatable).
 Its full source spelling is removed with the definition, including an empty prefix
 that is absent from the AST range. Rewrites for configured annotations must also
-be empty or `inline`. Simple object body macros are supported when expanded-token
-and semantic records remain equal. Function-like body macros, pragma-producing
-macros and macro-generated declarations remain deferred.
+be empty or `inline`. Object body macros and bounded function-like body macros
+are supported when expanded-token and semantic records remain equal. A function-like
+invocation must have a complete physical spelling range wholly inside the literal
+opening and closing braces of the function's `CompoundStmt`. Its unexpanded argument
+ranges and nested expansions must also remain inside that invocation/body in every
+original, baseline, trial and final context. Signature/constructor-initializer macros,
+macro-generated function braces or whole-function declarations, unresolvable/cross-boundary ranges,
+pragma-producing macros, and stringification/token-pasting macros remain deferred.
+
+The original invocation spelling moves intact, including arguments that an empty
+macro erases from the AST. For example, a variadic catch wrapper can retain its named
+exception declaration and full handler even in a context that defines the wrapper to
+nothing. `return`, `break`, and `throw` inside contained arguments are ordinary control
+flow; their expanded AST structure, binding and enclosing targets still participate
+in semantic validation. The generator does not pre-expand or rewrite the invocation.
+Macro definitions must already be available at the destination; changed replacements,
+lookup or pragma effects reject relocation. A shared interval index checks complete
+invocation overlap and containment without rescanning source files per candidate.
 
 Deferred candidates include templates and class-template methods, constructor
 function-try-blocks, defaulted/deleted definitions, global allocation/deallocation
@@ -221,14 +237,17 @@ cannot veto relocation. If the unstitched artifact fails parsing, the report mar
 `baseline` as `invalid`, records its compiler diagnostics and
 `destination_parse_error` reason, and blocks relocation with `baseline_invalid`.
 The unchanged legacy output does not carry a semantic safety claim. A successful
-delta check covers the supplied configurations only. Multiple commands
-for a source are deliberately rejected; validate separate builds/configurations
-explicitly. Consumer macros, different compiler semantics, unmodeled extensions,
+delta check covers the supplied configurations only. Stitching without automatic
+inlining deliberately rejects multiple commands for a source. With
+[`--inline-functions`](inline-functions.md), multiple commands provide the
+configurations required to cover conditional source declarations, and each is
+validated. Consumer macros, different compiler semantics, unmodeled extensions,
 and uninstantiated templates are not universally proven.
 
 Diagnostics go to stderr. The optional version-1 JSON report records contexts,
 locations, accepted/skipped reasons and compiler diagnostics, matching and removal
-counts, functions already inline, elapsed analysis time, retained implementation
+counts, functions already inline, unique automatic `inlineInsertions` before
+stitching, elapsed analysis time, retained implementation
 state, and `bytes` (`unstitched`, `stitched`, signed `savings`). Original-to-unstitched
 diagnostics are deduplicated by reason and bounded to ten records. The report must
 be outside scanned roots and distinct from inputs, config,
@@ -290,7 +309,7 @@ backend and 0.31 MB without it; the enabled build used separate PDB debug
 information. These are local build measurements, not published
 package sizes or startup/memory guarantees.
 
-### Latest csv-parser check
+### Historical csv-parser comparison
 
 The locally checked upstream revision was
 `e623089b34e6842fca909d1d0af04ef1b93f423d` (October 25, 2026). Its C++ sources and
@@ -321,7 +340,7 @@ headers after the configured guard. `<algorithm>`, `<vector>` and `<string>` eac
 appeared once. Analysis took 64,707 ms (64,791 ms external wall time), with the
 same 37 frontend parses and skip reasons. Timings vary between local runs.
 
-The current strict audit intentionally rejects that upstream revision before
+The strict audit intentionally rejects that upstream revision before
 Clang discovery or output writing: 22 headers have both guarded and unguarded
 occurrences. In particular, `data_frame_executor.hpp` includes `<thread>` without
 the `CSV_ENABLE_THREADS` guard used by the scheduler and task pool. This is tracked

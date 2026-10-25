@@ -92,6 +92,12 @@ preconditions, and the cached structural algorithm.
 
 ## Building
 
+The optional [`--inline-functions` mode](docs/inline-functions.md) lets the
+Clang-enabled generator supply `inline` for ordinary external definitions,
+including definitions left unstitched. It works with stitching off and accepts
+C++11 contexts in that mode. Conditional source declarations must be covered by
+the supplied compiler contexts. Lightweight binaries reject this option clearly.
+
 Requirements:
 
 - CMake 3.20 or newer
@@ -145,6 +151,8 @@ Common options:
 --merge-namespaces            Merge supported adjacent namespaces recursively; default off.
 --no-merge-namespaces         Disable namespace merging, overriding JSON config.
 --function-stitching <mode>    off (default), free, methods, or all; requires Clang build.
+--inline-functions            Add inline to external function definitions; requires Clang.
+--no-inline-functions         Disable automatic inlining, overriding JSON config.
 --compilation-database <path>  compile_commands.json or its directory.
 --frontend-arg <argument>      Complete frontend arguments instead of a database; repeatable.
 --stitching-report <path>      Optional versioned JSON analysis report.
@@ -169,6 +177,7 @@ default. You can also pass a config explicitly with `--config`.
   "implementationMarker": "MYLIB_IMPLEMENTATION_MARKER",
   "entry": "include/mylib/api.hpp",
   "deduplicateIncludes": false,
+  "inlineFunctions": false,
   "includeGuard": "MYLIB_HPP",
   "allowMixedIncludes": []
 }
@@ -188,7 +197,7 @@ Shell quoting must preserve those delimiters: POSIX shells and PowerShell accept
 Use this repository as a composite action from a release tag:
 
 ```yaml
-- uses: owner/single_header@v1.0.0
+- uses: owner/single_header@1.1.0
   with:
     include-root: include
     output: dist/library.hpp
@@ -203,6 +212,13 @@ replaces configured waivers when supplied. It does not exclude headers from
 hoisting. The action also
 exposes the installed executable as the `executable` output. Set `run: "false"`
 to install the tool without immediately running it.
+
+For compiler-backed generation, supply `executable: path/to/single_header` to use
+a locally built Clang-enabled binary instead of downloading the lightweight one.
+The Action forwards `inline-functions`, `function-stitching`,
+`compilation-database`, `frontend-arg`, `stitching-report`, and `inline-annotation`
+to that executable. See [automatic inlining](docs/inline-functions.md) for the
+source-coverage and multi-configuration contract.
 
 ## Development
 

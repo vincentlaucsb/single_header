@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(single_header
-  VERSION 1.0.0
+  VERSION 1.1.0
   DESCRIPTION "Small C++ single-header amalgamation tool"
   LANGUAGES CXX)
 
@@ -46,6 +46,7 @@ if(SINGLE_HEADER_WITH_CLANG)
   target_sources(single_header PRIVATE
     src/stitching/engine.cpp
     src/stitching/frontend.cpp
+    src/stitching/inline_functions.cpp
     src/stitching/semantics.cpp
     src/stitching/source.cpp
     src/stitching/validation.cpp)
@@ -89,7 +90,7 @@ if(BUILD_TESTING)
   set(TEST_FIXTURE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
   set(TEST_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-output")
 
-  add_executable(single_header_tests tests/test_cli.cpp tests/test_output_cleanup.cpp src/output_cleanup.cpp src/output_lexer.cpp src/namespace_merging.cpp)
+  add_executable(single_header_tests tests/test_cli.cpp tests/test_output_cleanup.cpp tests/test_inline_functions.cpp src/output_cleanup.cpp src/output_lexer.cpp src/namespace_merging.cpp)
   target_compile_features(single_header_tests PRIVATE cxx_std_17)
   target_link_libraries(single_header_tests PRIVATE Catch2::Catch2WithMain)
   target_link_libraries(single_header_tests PRIVATE nlohmann_json::nlohmann_json)

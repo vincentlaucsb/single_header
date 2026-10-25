@@ -38,7 +38,7 @@ void reject_unknown_config_keys(const json &document, const fs::path &path) {
   static const std::set<std::string> known_keys = {
     "includeRoots", "output", "sources", "rewriteMacros", "implementationMarker", "entry",
     "functionStitching", "compilationDatabase", "frontendArgs", "stitchingReport", "inlineAnnotations",
-    "deduplicateIncludes", "includeGuard", "allowMixedIncludes", "mergeNamespaces"};
+    "deduplicateIncludes", "includeGuard", "allowMixedIncludes", "mergeNamespaces", "inlineFunctions"};
 
   for (auto it = document.begin(); it != document.end(); ++it) {
     if (!known_keys.count(it.key())) {
@@ -135,6 +135,11 @@ Options read_config(const fs::path &config_path) {
   }
   options.frontend_args = read_json_string_array(document, "frontendArgs", config_path);
   options.inline_annotations = read_json_string_array(document, "inlineAnnotations", config_path);
+  if (document.contains("inlineFunctions")) {
+    if (!document.at("inlineFunctions").is_boolean())
+      throw std::runtime_error("inlineFunctions in " + config_path.string() + " must be a boolean");
+    options.inline_functions = document.at("inlineFunctions").get<bool>();
+  }
   options.allow_mixed_includes = read_json_string_array(document, "allowMixedIncludes", config_path);
   if (document.contains("deduplicateIncludes")) {
     if (!document.at("deduplicateIncludes").is_boolean()) {

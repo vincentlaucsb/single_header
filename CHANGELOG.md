@@ -1,6 +1,22 @@
 # Changelog
 
-## 1.0.0 (unreleased)
+## 1.1.0 (unreleased)
+
+- Add opt-in compiler-backed automatic function inlining, including residual
+  definitions and stitching-OFF generation, with C++11 support in inline-only
+  mode and source-declaration coverage across multiple compiler configurations.
+- Support contained function-like body macros during stitching while preserving
+  their invocation spelling and compiler validation in each supplied context.
+- Allow the Action to use a locally built executable and forward compiler-backed
+  generation options.
+- Remove complete Doxygen file-documentation blocks, including descriptions,
+  while retaining legal notices, literal examples, and token separation.
+- Merge adjacent namespaces based on structural C++ and preprocessing facts.
+  Uppercase identifiers, nonstructural macros, pragmas, and internal conditionals
+  no longer disqualify entire namespace bodies.
+- Sort the hoisted include block alphabetically by header path.
+
+## 1.0.0 (2026-10-25)
 
 - Establish the documented CLI, JSON configuration, GitHub Action inputs/outputs,
   and versioned stitching-report schema as the public compatibility surface.
@@ -12,7 +28,7 @@
   waivers suppress only the audit and retain normal hoisting behavior.
 - Add opt-in recursive merging of supported adjacent namespace definitions after
   include processing. Preserve declaration order and preprocessing boundaries.
-- Automatically remove Doxygen file-documentation blocks and collapse ordinary repeated
+- Automatically remove Doxygen file directives and collapse ordinary repeated
   blank lines while protecting literal/comment content.
 - Add `--version`, sourced from the CMake project version. Release builds check out
   the requested tag and verify its agreement with the configured source version.

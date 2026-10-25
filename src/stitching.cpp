@@ -37,17 +37,19 @@ void validate_stitching_options(const Options &options) {
     throw std::runtime_error(
         "--function-stitching expects off, free, methods, or all");
   }
-  if (options.function_stitching == "off") {
+  if (options.function_stitching == "off" && !options.inline_functions) {
     return;
   }
 #ifndef SINGLE_HEADER_WITH_CLANG
   throw std::runtime_error(
-      "function stitching requires a build configured with "
+      std::string(options.inline_functions ? "--inline-functions" : "function stitching") +
+      " requires a build configured with "
       "-DSINGLE_HEADER_WITH_CLANG=ON and LLVM/Clang development packages");
 #else
   if (options.compilation_database.empty() == options.frontend_args.empty()) {
     throw std::runtime_error(
-        "function stitching requires exactly one of --compilation-database "
+        std::string(options.inline_functions ? "--inline-functions" : "function stitching") +
+        " requires exactly one of --compilation-database "
         "or one or more --frontend-arg arguments (complete Clang context)");
   }
   for (const auto &name : options.inline_annotations) {

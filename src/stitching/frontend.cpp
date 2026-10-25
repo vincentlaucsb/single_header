@@ -1,5 +1,6 @@
 #include "clang_sdk_allocator.hpp"
 #include "frontend.hpp"
+#include "inline_functions.hpp"
 #include "semantics.hpp"
 #include "source.hpp"
 #include "../helpers.hpp"
@@ -15,6 +16,7 @@
 #include <clang/Frontend/CompilerInstance.h>
 #include <clang/Frontend/FrontendActions.h>
 #include <clang/Lex/Lexer.h>
+#include <clang/Lex/MacroArgs.h>
 #include <clang/Lex/PPCallbacks.h>
 #include <clang/Lex/Preprocessor.h>
 #include <clang/Tooling/CompilationDatabase.h>
@@ -77,11 +79,31 @@ const std::string &event_file(const TokenInfo &token) { return token.file; }
 const std::string &event_file(const Expansion &macro) { return macro.where.file; }
 unsigned event_offset(const TokenInfo &token) { return token.offset; }
 unsigned event_offset(const Expansion &macro) { return macro.where.begin; }
+unsigned event_end(const TokenInfo &token) { return token.offset + 1; }
+unsigned event_end(const Expansion &macro) { return macro.where.end; }
+
+// Map the entire invocation (or argument), not merely the expansion's first
+// token, to the ultimate physical source. Nested/re-expanded invocations can
+// share their outer invocation's span; those bytes must all move together.
+Span expansion_span(SourceRange range, const SourceManager &sm,
+                    const LangOptions &language, FileIndex &files) {
+  if (range.isInvalid()) return {};
+  const auto physical = Lexer::makeFileCharRange(sm.getExpansionRange(range), sm, language);
+  if (physical.isInvalid() || physical.getBegin().isMacroID() || physical.getEnd().isMacroID() ||
+      sm.getFileID(physical.getBegin()) != sm.getFileID(physical.getEnd())) return {};
+  return {files.get(physical.getBegin(), sm).name, sm.getFileOffset(physical.getBegin()),
+          sm.getFileOffset(physical.getEnd())};
+}
+bool contains(const Span &outer, const Span &inner) {
+  return outer.valid() && inner.valid() && outer.file == inner.file &&
+         outer.begin <= inner.begin && inner.end <= outer.end;
+}
 
 // Offset indexes bound each query. Restoring pointer/encounter order preserves
 // fingerprints even when repeated includes revisit earlier physical offsets.
 template<class Event> struct EventIndex {
   std::map<std::string, std::vector<const Event *>> files;
+  std::map<std::string, std::vector<unsigned>> maximum_ends;
   explicit EventIndex(const std::vector<Event> &events) {
     for (const auto &event : events)
       files[event_file(event)].push_back(&event);
@@ -90,6 +112,12 @@ template<class Event> struct EventIndex {
       std::stable_sort(entries.begin(), entries.end(), [](const Event *a, const Event *b) {
         return event_offset(*a) < event_offset(*b);
       });
+      auto &ends = maximum_ends[file];
+      unsigned maximum = 0;
+      for (const auto *entry : entries) {
+        maximum = std::max(maximum, event_end(*entry));
+        ends.push_back(maximum);
+      }
     }
   }
   std::vector<const Event *> range(const std::string &file, unsigned begin = 0,
@@ -106,6 +134,22 @@ template<class Event> struct EventIndex {
     std::sort(result.begin(), result.end(), std::less<const Event *>{});
     return result;
   }
+  std::vector<const Event *> overlapping(const std::string &file, unsigned begin,
+                                         unsigned end) const {
+    const auto found = files.find(file);
+    if (found == files.end()) return {};
+    const auto &entries = found->second;
+    const auto stop = std::lower_bound(entries.begin(), entries.end(), end,
+        [](const Event *event, unsigned value) { return event_offset(*event) < value; });
+    const auto &ends = maximum_ends.at(file);
+    const auto first = std::upper_bound(ends.begin(), ends.begin() + (stop - entries.begin()), begin);
+    std::vector<const Event *> result;
+    for (auto entry = entries.begin() + (first - ends.begin()); entry != stop; ++entry)
+      if (event_end(**entry) > begin) result.push_back(*entry);
+    std::sort(result.begin(), result.end(), std::less<const Event *>{});
+    return result;
+  }
+
 };
 bool supported_attributes(const FunctionDecl *fn, bool definition) {
   for (const auto *attribute : fn->attrs())
@@ -179,13 +223,25 @@ struct Collector : RecursiveASTVisitor<Collector> {
             std::to_string(token.spelling.size()) + ':' + token.spelling + ';';
       }
     }
-    for (const auto *event : expansions.range(range.file, range.begin, range.end)) {
+    Span interior;
+    if (const auto *compound = dyn_cast<CompoundStmt>(fn->getBody())) {
+      const auto &sm = ctx.getSourceManager();
+      if (compound->getLBracLoc().isValid() && compound->getRBracLoc().isValid() &&
+          compound->getLBracLoc().isFileID() && compound->getRBracLoc().isFileID()) {
+        const auto first = Lexer::getLocForEndOfToken(compound->getLBracLoc(), 0, sm, ctx.getLangOpts());
+        if (first.isValid() && sm.getFileID(first) == sm.getFileID(compound->getRBracLoc()))
+          interior = {range.file, sm.getFileOffset(first), sm.getFileOffset(compound->getRBracLoc())};
+      }
+    }
+    for (const auto *event : expansions.overlapping(range.file, range.begin, range.end)) {
       const auto &expansion = *event;
-      if (expansion.where.file == range.file &&
-          expansion.where.begin >= range.begin &&
-          expansion.where.begin < range.end && !expansion.body_safe &&
-          record.unsupported.empty())
-        record.unsupported = "body_macro";
+      bool safe = expansion.body_safe && expansion.complete && contains(range, expansion.where);
+      if (expansion.function_like) {
+        safe = safe && contains(interior, expansion.where);
+        for (const auto &argument : expansion.arguments)
+          safe = safe && contains(expansion.where, argument) && contains(interior, argument);
+      }
+      if (!safe && record.unsupported.empty()) record.unsupported = "body_macro";
     }
     return record;
   }
@@ -226,7 +282,17 @@ struct Collector : RecursiveASTVisitor<Collector> {
         field_initializer(field, ctx, env.identities, semantic_cache);
     return true;
   }
+  bool VisitFunctionTemplateDecl(FunctionTemplateDecl *decl) {
+    if (env.inline_functions)
+      for (auto *fn : decl->specializations()) collect_inline_function(fn, ctx, env, result);
+    return true;
+  }
+  bool VisitClassTemplateSpecializationDecl(ClassTemplateSpecializationDecl *decl) {
+    if (env.inline_functions) collect_inline_class_instantiation(decl, ctx, env, result);
+    return true;
+  }
   bool VisitFunctionDecl(FunctionDecl *fn) {
+    if (env.inline_functions) collect_inline_function(fn, ctx, env, result);
     if (!project(fn->getLocation()) || fn->isImplicit())
       return true;
     if (const auto *method = dyn_cast<CXXMethodDecl>(fn))
@@ -571,7 +637,7 @@ struct Action : ASTFrontendAction {
       : result(output), env(environment), files(environment), discover(discovery) {}
   std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &ci,
                                                  llvm::StringRef) override {
-    if (!ci.getLangOpts().CPlusPlus17) {
+    if (env.require_cpp17 && !ci.getLangOpts().CPlusPlus17) {
       result.errors = true;
       result.diagnostics += "stitching requires C++17 or later\n";
     }
@@ -587,7 +653,7 @@ struct Action : ASTFrontendAction {
           action.result.artifact_seen = true;
       }
       void MacroExpands(const Token &name, const MacroDefinition &definition,
-                        SourceRange range, const MacroArgs *) override {
+                        SourceRange range, const MacroArgs *arguments) override {
         const auto &sm = ci.getSourceManager();
         const auto location = sm.getExpansionLoc(range.getBegin());
         const auto end = Lexer::getLocForEndOfToken(
@@ -608,7 +674,7 @@ struct Action : ASTFrontendAction {
                                  (info->getNumTokens() == 1 &&
                                   ci.getPreprocessor().getSpelling(
                                       *info->tokens_begin()) == "inline"));
-        bool body_safe = info && !info->isFunctionLike();
+        bool body_safe = info && spelling != "_Pragma" && spelling != "__pragma";
         if (info)
           for (const auto &token : info->tokens()) {
             const auto word = ci.getPreprocessor().getSpelling(token);
@@ -616,11 +682,30 @@ struct Action : ASTFrontendAction {
                 token.is(tok::hash) || token.is(tok::hashhash))
               body_safe = false;
           }
-        action.expansions.push_back(
-            {{physical_file, sm.getFileOffset(location),
-              sm.getFileOffset(end)},
-             spelling,
-             annotation, body_safe});
+        const auto invocation = expansion_span(range, sm, ci.getLangOpts(), action.files);
+        Expansion expansion{invocation.valid() ? invocation : Span{physical_file, sm.getFileOffset(location), sm.getFileOffset(end)},
+                            spelling, annotation, body_safe, info && info->isFunctionLike(), invocation.valid(), {}};
+        if (expansion.function_like && !arguments) expansion.complete = false;
+        if (arguments) {
+          for (unsigned i = 0; i < arguments->getNumMacroArguments(); ++i) {
+            const auto *first = arguments->getUnexpArgument(i);
+            const auto length = MacroArgs::getArgLength(first);
+            if (!length) continue; // Empty/erased arguments still belong to the full invocation span.
+            const auto argument = expansion_span(SourceRange(first->getLocation(), first[length - 1].getLocation()), sm, ci.getLangOpts(), action.files);
+            expansion.complete = expansion.complete && contains(invocation, argument);
+            expansion.arguments.push_back(argument);
+          }
+        }
+        action.expansions.push_back(std::move(expansion));
+      }
+      void PragmaDirective(SourceLocation location, PragmaIntroducerKind) override {
+        const auto &sm = ci.getSourceManager();
+        const auto &identity = action.files.get(location, sm);
+        if (!identity.project || location.isFileID()) return;
+        const auto invocation = expansion_span(SourceRange(location), sm, ci.getLangOpts(), action.files);
+        if (invocation.valid())
+          action.expansions.push_back({invocation, "<macro pragma>", false, false, false, true, {}});
+
       }
     };
     ci.getPreprocessor().addPPCallbacks(std::make_unique<Macros>(*this, ci));
@@ -647,6 +732,12 @@ struct Action : ASTFrontendAction {
         // A failed parse is already a rejection; never analyze recovery nodes.
         if (action.result.errors || ctx.getDiagnostics().hasErrorOccurred())
           return;
+        if (action.env.inline_functions) {
+          for (const auto &token : action.tokens)
+            action.result.observed_tokens[token.file].insert(token.offset);
+          for (const auto &expansion : action.expansions)
+            if (expansion.where.valid()) action.result.observed_ranges.push_back(expansion.where);
+        }
         const EventIndex<TokenInfo> tokens(action.tokens);
         const EventIndex<Expansion> expansions(action.expansions);
         Collector collector(ctx, action.result, action.env, action.files, tokens,

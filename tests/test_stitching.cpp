@@ -34,7 +34,8 @@ struct StitchFixture {
   }
   void runtime(const std::string &one, const std::string &two,
                const std::string &main,
-               const std::string &preamble = {}) const {
+               const std::string &preamble = {},
+               const std::string &extra_cmake = {}) const {
     const auto project = work / "consumer";
     write_text(project / "one.cpp",
                preamble + "#include \"generated.hpp\"\n" + one);
@@ -45,7 +46,7 @@ struct StitchFixture {
         "cmake_minimum_required(VERSION 3.20)\nproject(stitched LANGUAGES "
         "CXX)\n"
         "add_executable(consumer one.cpp two.cpp "
-        "main.cpp)\ntarget_compile_features(consumer PRIVATE cxx_std_17)\n"
+        "main.cpp)\ntarget_compile_features(consumer PRIVATE cxx_std_17)\n" + extra_cmake +
         "target_include_directories(consumer PRIVATE \"" +
             work.generic_string() +
             "\")\n"
@@ -1024,4 +1025,155 @@ TEST_CASE("source location defaults retain their actual call and aggregate initi
     CHECK(fixture.reason(data, "safe").find("changed_semantics:") == 0);
     CHECK(fixture.reason(data, "untouched") == "accepted");
   }
+}
+
+
+TEST_CASE("contained function macros preserve nested invocations and control flow targets", "[stitching][body-macros][runtime]") {
+  StitchFixture fixture("contained_function_macros");
+  fixture.files("#pragma once\n#define ADD(a, b) ((a) + (b))\n#define PASS(...) __VA_ARGS__\n"
+      "#define STOP_IF(condition) if (condition) break\n#define RETURN_VALUE(value) return (value)\n"
+      "int exercise(int);\nstruct Counter { int run(int); };\n",
+      "int exercise(int limit) { int sum = 0; for (int i = 0; i < limit; ++i) { "
+      "PASS(STOP_IF(i == 3)); sum = ADD(sum, PASS(ADD(i, 1))); } PASS(return sum;); }\n"
+      "int Counter::run(int limit) { int sum = 0; for (int i = 0; i < limit; ++i) { "
+      "for (int j = 0; j < 4; ++j) { STOP_IF(j == 2); sum += ADD(i, j); } } RETURN_VALUE(sum); }\n");
+  const auto data = fixture.generate();
+  CHECK(fixture.reason(data, "exercise") == "accepted");
+  CHECK(fixture.reason(data, "Counter::run") == "accepted");
+  const auto output = read_text(fixture.output);
+  CHECK(output.find("sum = ADD(sum, PASS(ADD(i, 1)))") != std::string::npos);
+  CHECK(output.find("STOP_IF(j == 2)") != std::string::npos);
+  CHECK(output.find("RETURN_VALUE(sum)") != std::string::npos);
+  fixture.runtime("int one() { return exercise(8); }\n",
+      "int two() { return Counter{}.run(3); }\n",
+      "int one(); int two(); int main() { return one() == 6 && two() == 9 ? 0 : 1; }\n");
+}
+
+TEST_CASE("variadic catch macros preserve named bindings and erased handler spelling in every context", "[stitching][body-macros][contexts][runtime]") {
+  StitchFixture fixture("variadic_catch_macros");
+  const std::string header = R"(#pragma once
+#ifndef CSV_EXCEPTIONS_ENABLED
+#define CSV_EXCEPTIONS_ENABLED 1
+#endif
+#if CSV_EXCEPTIONS_ENABLED
+#define CSV_TRY try
+#define CSV_CATCH(exception_declaration, ...) catch exception_declaration __VA_ARGS__
+template<class A, class B> struct Failure { int value; };
+#else
+#define CSV_TRY
+#define CSV_CATCH(exception_declaration, ...)
+#endif
+#define WRAP(...) __VA_ARGS__
+#define PLUS(a, b) ((a) + (b))
+int guarded(int);
+int rethrowing();
+)";
+  const std::string body = R"({
+  int answer = 0;
+  CSV_TRY {
+#if CSV_EXCEPTIONS_ENABLED
+    WRAP(if (input < 0) throw Failure<int, long>{PLUS(4, WRAP(5))};)
+#endif
+    answer = PLUS(input, WRAP(2));
+  } CSV_CATCH((const Failure<int, long>& failure), { return PLUS(failure.value, WRAP(3)); })
+  return answer;
+})";
+  fixture.files(header, "int guarded(int input) " + body + R"(
+int rethrowing() {
+#if CSV_EXCEPTIONS_ENABLED
+  try {
+    CSV_TRY { WRAP(throw Failure<int, long>{9};) }
+    CSV_CATCH((const Failure<int, long>& failure), { (void)failure; WRAP(throw;); })
+  } catch (const Failure<int, long>& outer) { return outer.value; }
+#else
+  return 9;
+#endif
+}
+)");
+  // One physical definition is discovered under both exception configurations.
+  write_text(fixture.include / "other.cpp", "#include \"api.hpp\"\n");
+  const auto database = fixture.work / "compile_commands.json";
+  nlohmann::json commands = nlohmann::json::array();
+  for (const auto &file : {"api.cpp", "other.cpp"})
+    commands.push_back({{"directory", fixture.work.generic_string()}, {"file", (fixture.include / file).generic_string()},
+      {"arguments", {"clang++", "-std=c++17", std::string("-DCSV_EXCEPTIONS_ENABLED=") + (std::string(file) == "api.cpp" ? "1" : "0"),
+                     (fixture.include / file).generic_string()}}});
+  write_text(database, commands.dump());
+  const auto command = quote(tool_path()) + " --include-root " + quote(fixture.include) + " --output " + quote(fixture.output) +
+      " --function-stitching all --compilation-database " + quote(database) + " --stitching-report " + quote(fixture.report);
+  run_command(command);
+  const auto data = nlohmann::json::parse(read_text(fixture.report));
+  CHECK(data.at("baseline") == "valid");
+  CHECK(fixture.reason(data, "guarded") == "accepted");
+  CHECK(fixture.reason(data, "rethrowing") == "accepted");
+  CHECK(data.at("work").at("finalParses") == 2);
+  const auto output = read_text(fixture.output);
+  CHECK(output.find(body) != std::string::npos);
+  CHECK(data.at("bytes").at("stitched") == output.size());
+  run_command(quote(tool_path()) + " --include-root " + quote(fixture.include) + " --output " + quote(fixture.output));
+  const auto unstitched = read_text(fixture.output);
+  CHECK(data.at("bytes").at("unstitched") == unstitched.size());
+  CHECK(data.at("bytes").at("savings") == static_cast<std::int64_t>(unstitched.size()) - static_cast<std::int64_t>(output.size()));
+  run_command(command);
+  CHECK(read_text(fixture.output) == output);
+  fixture.runtime("int one() { return guarded(-1) + rethrowing(); }\n",
+      "int two() { return guarded(5); }\n",
+      "int one(); int two(); int main() { return one() == 21 && two() == 7 ? 0 : 1; }\n",
+      "#define CSV_EXCEPTIONS_ENABLED 1\n");
+
+  // The exception-only type and named variable are deliberately unavailable;
+  // the erased argument still must be copied whole and compile without EH.
+  // Compiler-disabled EH is verified by discovery/trial/final in this context.
+  run_command(fixture.command("all", "--frontend-arg -DCSV_EXCEPTIONS_ENABLED=0 --frontend-arg -fno-exceptions"));
+  const auto disabled_data = nlohmann::json::parse(read_text(fixture.report));
+  CHECK(fixture.reason(disabled_data, "guarded") == "accepted");
+  CHECK(fixture.reason(disabled_data, "rethrowing") == "accepted");
+  CHECK(read_text(fixture.output).find(body) != std::string::npos);
+  fixture.runtime("int one() { return guarded(-1) + rethrowing(); }\n",
+      "int two() { return guarded(5); }\n",
+      "int one(); int two(); int main() { return one() == 10 && two() == 7 ? 0 : 1; }\n", {},
+      "target_compile_definitions(consumer PRIVATE CSV_EXCEPTIONS_ENABLED=0)\n"
+      "if(MSVC)\ntarget_compile_options(consumer PRIVATE /EHs-c-)\n"
+      "else()\ntarget_compile_options(consumer PRIVATE -fno-exceptions)\nendif()\n");
+}
+
+TEST_CASE("function macro containment rejects generated function boundaries and escaping invocations", "[stitching][body-macros][fallback]") {
+  const std::vector<std::pair<std::string, std::string>> definitions = {
+    {"closing", "#define CLOSE() }\nint value() { return 7; CLOSE()\n"},
+    {"opening", "#define OPEN() {\nint value() OPEN() return 7; }\n"},
+    {"whole", "#define DEFINE(name, ...) int name() { __VA_ARGS__ }\nDEFINE(value, return 7;)\n"},
+    {"argument_close", "#define FORWARD(...) __VA_ARGS__\nint value() { FORWARD(return 7; })\n"},
+    {"escape", "#define ESCAPE(...) } __VA_ARGS__ int other() {\nint value() { return 7; ESCAPE(int emitted;) return 9; }\n"}};
+  for (const auto &[name, source] : definitions) {
+    INFO(name);
+    StitchFixture fixture("macro_boundary_" + name);
+    fixture.files("#pragma once\nint value();\n", source);
+    const auto data = fixture.generate();
+    CHECK(fixture.reason(data, "value") != "accepted");
+    CHECK(data.at("counts").at("removedBodies") == 0);
+  }
+}
+
+TEST_CASE("function macros in signatures initializers and pragma-producing bodies stay deferred", "[stitching][body-macros][fallback]") {
+  StitchFixture fixture("macro_effects");
+  fixture.files("#pragma once\n#define PASS(...) __VA_ARGS__\n#define EFFECT() _Pragma(\"pack(push, 1)\")\n"
+      "#define ALIAS() EFFECT()\nint value();\nstruct Box { Box(); int value; };\nint signed_value();\n",
+      "int value() { ALIAS(); return 7; }\nBox::Box() : value(PASS(3)) {}\nint signed_value PASS(()) { return 9; }\n");
+  const auto data = fixture.generate();
+  CHECK(fixture.reason(data, "value") == "body_macro");
+  CHECK(fixture.reason(data, "Box::Box") != "accepted");
+  CHECK(fixture.reason(data, "signed_value") != "accepted");
+  CHECK(data.at("counts").at("removedBodies") == 0);
+}
+
+TEST_CASE("function macros still reject destination redefinitions and changed lookup", "[stitching][body-macros][lookup]") {
+  StitchFixture fixture("macro_changed_lookup");
+  fixture.files("#pragma once\n#define APPLY(value) pick(value)\nint pick(long);\nint run();\nint pick(int);\n"
+      "#define VALUE(value) ((value) + 1)\nint changed();\nint ordinary();\n",
+      "#undef VALUE\n#define VALUE(value) ((value) + 2)\n"
+      "int run() { return APPLY(0); }\nint changed() { return VALUE(4); }\nint ordinary() { return 7; }\n");
+  const auto data = fixture.generate();
+  CHECK(fixture.reason(data, "run").find("changed_semantics:") == 0);
+  CHECK(fixture.reason(data, "changed").find("changed_semantics:") == 0);
+  CHECK(fixture.reason(data, "ordinary") == "accepted");
 }
