@@ -710,7 +710,10 @@ struct Action : ASTFrontendAction {
     };
     ci.getPreprocessor().addPPCallbacks(std::make_unique<Macros>(*this, ci));
     ci.getPreprocessor().setTokenWatcher([this, &ci](const Token &token) {
-      if (token.is(tok::eof) || token.getLocation().isInvalid())
+      // Pragma handlers inject annotation tokens whose payload/UintData is not
+      // a source spelling or length. Passing them to getSpelling reads that
+      // payload as a byte count. Pragma effects are tracked separately above.
+      if (token.is(tok::eof) || token.isAnnotation() || token.getLocation().isInvalid())
         return;
       const auto &sm = ci.getSourceManager();
       const auto &identity = files.get(token.getLocation(), sm);

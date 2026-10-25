@@ -1157,10 +1157,14 @@ TEST_CASE("function macro containment rejects generated function boundaries and 
 TEST_CASE("function macros in signatures initializers and pragma-producing bodies stay deferred", "[stitching][body-macros][fallback]") {
   StitchFixture fixture("macro_effects");
   fixture.files("#pragma once\n#define PASS(...) __VA_ARGS__\n#define EFFECT() _Pragma(\"pack(push, 1)\")\n"
-      "#define ALIAS() EFFECT()\nint value();\nstruct Box { Box(); int value; };\nint signed_value();\n",
-      "int value() { ALIAS(); return 7; }\nBox::Box() : value(PASS(3)) {}\nint signed_value PASS(()) { return 9; }\n");
+      "#define RESTORE() _Pragma(\"pack(pop)\")\n"
+      "#define ALIAS() EFFECT()\nint value();\nint direct();\nstruct Box { Box(); int value; };\nint signed_value();\n",
+      "int value() { ALIAS(); RESTORE(); return 7; }\n"
+      "int direct() { _Pragma(\"pack(push, 1)\") _Pragma(\"pack(pop)\") return 8; }\n"
+      "Box::Box() : value(PASS(3)) {}\nint signed_value PASS(()) { return 9; }\n");
   const auto data = fixture.generate();
   CHECK(fixture.reason(data, "value") == "body_macro");
+  CHECK(fixture.reason(data, "direct") == "body_macro");
   CHECK(fixture.reason(data, "Box::Box") != "accepted");
   CHECK(fixture.reason(data, "signed_value") != "accepted");
   CHECK(data.at("counts").at("removedBodies") == 0);
