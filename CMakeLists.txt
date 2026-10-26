@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(single_header
-  VERSION 1.1.0
+  VERSION 1.1.1
   DESCRIPTION "Small C++ single-header amalgamation tool"
   LANGUAGES CXX)
 

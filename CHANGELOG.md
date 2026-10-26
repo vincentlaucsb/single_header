@@ -1,6 +1,14 @@
 # Changelog
 
-## 1.1.0 (unreleased)
+## 1.1.1
+
+- Make optimized generation usable directly from a JSON config, including
+  source-specific frontend variants and config-relative compiler arguments.
+- Publish a Linux Clang-backend package with its driver, resource headers and
+  runtime libraries; the Action can select this package without building LLVM.
+- Let explicit CLI compiler-context options replace the configured context.
+
+## 1.1.0
 
 - Add opt-in compiler-backed automatic function inlining, including residual
   definitions and stitching-OFF generation, with C++11 support in inline-only

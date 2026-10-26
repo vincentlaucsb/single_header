@@ -52,6 +52,9 @@ void validate_stitching_options(const Options &options) {
         " requires exactly one of --compilation-database "
         "or one or more --frontend-arg arguments (complete Clang context)");
   }
+  if (!options.frontend_variants.empty() &&
+      (!options.compilation_database.empty() || !options.inline_functions))
+    throw std::runtime_error("frontendVariants requires frontendArgs and inlineFunctions");
   for (const auto &name : options.inline_annotations) {
     for (const auto &[macro, value] : options.macro_rewrites) {
       if (macro == name && value != "" && value != "inline")

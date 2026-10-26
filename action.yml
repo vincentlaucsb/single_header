@@ -7,6 +7,10 @@ branding:
   color: blue
 
 inputs:
+  backend:
+    description: Package to install, lightweight (default) or clang (Linux x64, includes Clang resources/runtime).
+    default: lightweight
+    required: false
   executable:
     description: Optional existing CLI executable (for a locally built Clang backend). Skips download.
     required: false
@@ -85,6 +89,7 @@ runs:
       shell: pwsh
       env:
         INPUT_VERSION: ${{ inputs.version }}
+        INPUT_BACKEND: ${{ inputs.backend }}
         INPUT_EXECUTABLE: ${{ inputs.executable }}
         INPUT_REPOSITORY: ${{ inputs.repository }}
         ACTION_REF: ${{ github.action_ref }}
@@ -135,6 +140,15 @@ runs:
           throw "Unsupported runner target: $os/$arch"
         }
 
+        $backend = $env:INPUT_BACKEND
+        if (-not $backend) { $backend = "lightweight" }
+        if ($backend -notin @("lightweight", "clang")) {
+          throw "Unknown single_header backend: $backend"
+        }
+        if ($backend -eq "clang") {
+          if ($target -ne "linux-x86_64") { throw "The clang package currently supports Linux x64." }
+          $target += "-clang"
+        }
         $assetName = "single_header-$version-$target.$extension"
         $downloadUrl = "https://github.com/$repository/releases/download/$version/$assetName"
         $installDir = Join-Path $env:RUNNER_TEMP "single_header-action"

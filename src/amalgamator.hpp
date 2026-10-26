@@ -11,6 +11,11 @@
 
 namespace single_header {
 
+struct FrontendVariant {
+  std::vector<std::filesystem::path> sources;
+  std::vector<std::string> args;
+};
+
 struct Options {
   std::vector<std::filesystem::path> include_roots;
   std::vector<std::string> source_patterns;
@@ -21,6 +26,8 @@ struct Options {
   std::string function_stitching = "off";
   std::filesystem::path compilation_database;
   std::vector<std::string> frontend_args;
+  std::vector<FrontendVariant> frontend_variants;
+  std::filesystem::path frontend_directory;
   std::filesystem::path stitching_report;
   std::vector<std::string> inline_annotations;
   bool inline_functions = false;

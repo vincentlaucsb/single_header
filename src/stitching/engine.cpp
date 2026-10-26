@@ -6,6 +6,7 @@
 
 #include <clang/Tooling/JSONCompilationDatabase.h>
 #include <llvm/Support/Signals.h>
+#include <llvm/Support/FileSystem.h>
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <chrono>
@@ -22,6 +23,20 @@ using json = nlohmann::json;
 
 namespace single_header {
 using namespace stitching;
+
+namespace {
+fs::path frontend_driver() {
+  // Release backend packages carry the driver and its resource headers together.
+  // Local builds can continue using their configured LLVM development install.
+  const auto executable = llvm::sys::fs::getMainExecutable(
+      "single_header", reinterpret_cast<void *>(&frontend_driver));
+  auto sibling = fs::path(executable).parent_path() / "clang++";
+#ifdef _WIN32
+  sibling += ".exe";
+#endif
+  return fs::exists(sibling) ? sibling : fs::path(SINGLE_HEADER_CLANG_BINARY);
+}
+} // namespace
 
 std::string stitch_functions(const Options &options,
                              const std::vector<fs::path> &headers,
@@ -99,12 +114,23 @@ std::string stitch_functions(const Options &options,
         commands.push_back(std::move(command));
       }
     } else {
-      std::vector<std::string> arguments{SINGLE_HEADER_CLANG_BINARY};
+      std::vector<std::string> arguments{frontend_driver().string()};
       arguments.insert(arguments.end(), options.frontend_args.begin(),
                        options.frontend_args.end());
-      arguments.push_back(source.string());
-      commands.emplace_back(fs::current_path().string(), source.string(),
-                            arguments, "");
+      const auto directory = options.frontend_directory.empty() ? fs::current_path()
+          : normalize_path(options.frontend_directory);
+      auto append = [&](const std::vector<std::string> &extra) {
+        auto context = arguments;
+        context.insert(context.end(), extra.begin(), extra.end());
+        context.push_back(source.string());
+        commands.emplace_back(directory.string(), source.string(), context, "");
+      };
+      append({});
+      for (const auto &variant : options.frontend_variants) {
+        if (variant.sources.empty() || std::any_of(variant.sources.begin(), variant.sources.end(),
+              [&](const auto &path) { return paths_alias(path, source); }))
+          append(variant.args);
+      }
     }
   }
   json report = {{"version", 1},

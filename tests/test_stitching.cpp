@@ -63,6 +63,53 @@ struct StitchFixture {
 };
 } // namespace
 
+TEST_CASE("config-only generation covers source variants from another working directory",
+          "[stitching][config][frontend]") {
+  StitchFixture fixture("config_only_variants");
+  fixture.files("#pragma once\n#include <detail.hpp>\nint base();\n"
+                "#if EXTRA\nint alternate();\n#endif\nint other();\n",
+                "int base() { return configured_value; }\n"
+                "#if EXTRA\nint alternate() { return 2; }\n#endif\n");
+  write_text(fixture.include / "detail.hpp", "#pragma once\nconstexpr int configured_value = 40;\n");
+  write_text(fixture.include / "other.cpp", "#include \"api.hpp\"\nint other() { return base(); }\n");
+  const auto config = fixture.work / "single_header.json";
+  nlohmann::json settings{{"includeRoots", {"include"}}, {"entry", "include/api.hpp"},
+      {"output", "generated.hpp"}, {"stitchingReport", "report.json"},
+      {"inlineFunctions", true}, {"functionStitching", "all"},
+      {"frontendArgs", {"-std=c++17", "-Iinclude"}},
+      {"frontendVariants", {{{"sources", {"include/api.cpp"}}, {"args", {"-DEXTRA=1"}}}}}};
+  write_text(config, settings.dump());
+  const auto command = quote(tool_path()) + " --config " + quote(config);
+  run_command(command);
+  const auto report = nlohmann::json::parse(read_text(fixture.report));
+  CHECK(report.at("configurations").size() == 3);
+  size_t variants = 0;
+  for (const auto &context : report.at("configurations")) {
+    const auto args = context.at("arguments").get<std::vector<std::string>>();
+    if (std::find(args.begin(), args.end(), "-DEXTRA=1") != args.end()) {
+      ++variants;
+      CHECK(fs::path(context.at("source").get<std::string>()).filename() == "api.cpp");
+    }
+  }
+  CHECK(variants == 1);
+  fixture.runtime("int one() { return base() + alternate(); }\n",
+                  "int two() { return other(); }\n",
+                  "int one(); int two(); int main() { return one() == 42 && two() == 40 ? 0 : 1; }\n",
+                  "#define EXTRA 1\n");
+  const auto cli_include = quote_value("-I" + fs::relative(fixture.include, fs::current_path()).generic_string());
+  const auto cli_context = command + " --frontend-arg -std=c++17 --frontend-arg " + cli_include;
+  run_command(cli_context + " --frontend-arg -DEXTRA=1");
+  CHECK(nlohmann::json::parse(read_text(fixture.report)).at("configurations").size() == 2);
+  const auto override = run_result(cli_context);
+  CHECK(override.status != 0);
+  CHECK(override.error.find("unobserved C++ tokens") != std::string::npos);
+  settings["frontendVariants"][0]["sources"] = {"include/other.cpp"};
+  write_text(config, settings.dump());
+  const auto unmatched = run_result(command);
+  CHECK(unmatched.status != 0);
+  CHECK(unmatched.error.find("unobserved C++ tokens") != std::string::npos);
+}
+
 TEST_CASE("stitches real C++ library bodies and preserves multi-TU identity "
           "and local state",
           "[stitching][runtime]") {

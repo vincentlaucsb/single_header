@@ -88,6 +88,7 @@ jobs:
           Copy-Item -LiteralPath "${{ matrix.executable }}" -Destination (Join-Path $stage "${{ matrix.binary_name }}")
           Copy-Item -LiteralPath "README.md" -Destination $stage
           Copy-Item -LiteralPath "CHANGELOG.md" -Destination $stage
+          Copy-Item -LiteralPath "LICENSE" -Destination $stage
           Copy-Item -LiteralPath "docs" -Destination (Join-Path $stage "docs") -Recurse
 
           if ("${{ matrix.archive }}" -eq "zip") {
@@ -106,3 +107,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "${{ steps.package.outputs.tag }}" "${{ steps.package.outputs.archive }}" --clobber
+
+  clang-linux:
+    uses: ./.github/workflows/backend-package.yml
+    with:
+      tag: ${{ github.event.release.tag_name || inputs.tag }}
+      publish: true

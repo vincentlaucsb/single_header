@@ -11,6 +11,12 @@ single_header --config single_header.json --inline-functions \
   --compilation-database build/header-contexts --output dist/library.hpp
 ```
 
+For config-only generation, set `inlineFunctions`, `functionStitching`, and
+`frontendArgs` in JSON. `frontendVariants` adds source-specific alternative
+arguments without an externally generated compilation database; see the
+[config-only example](../README.md). All relative frontend paths use the config
+directory as their working directory.
+
 The input files are not edited. The generator collects physical insertion points
 from Clang's function declarations, composes those edits with accepted stitching
 edits, and parses the resulting generated header in every supplied context.

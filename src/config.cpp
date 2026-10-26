@@ -38,7 +38,8 @@ void reject_unknown_config_keys(const json &document, const fs::path &path) {
   static const std::set<std::string> known_keys = {
     "includeRoots", "output", "sources", "rewriteMacros", "implementationMarker", "entry",
     "functionStitching", "compilationDatabase", "frontendArgs", "stitchingReport", "inlineAnnotations",
-    "deduplicateIncludes", "includeGuard", "allowMixedIncludes", "mergeNamespaces", "inlineFunctions"};
+    "deduplicateIncludes", "includeGuard", "allowMixedIncludes", "mergeNamespaces", "inlineFunctions",
+    "frontendVariants"};
 
   for (auto it = document.begin(); it != document.end(); ++it) {
     if (!known_keys.count(it.key())) {
@@ -134,6 +135,24 @@ Options read_config(const fs::path &config_path) {
         read_json_string(document, "stitchingReport", config_path));
   }
   options.frontend_args = read_json_string_array(document, "frontendArgs", config_path);
+  options.frontend_directory = fs::absolute(config_dir);
+  if (document.contains("frontendVariants")) {
+    const auto &variants = document.at("frontendVariants");
+    if (!variants.is_array())
+      throw std::runtime_error("frontendVariants must be an array of objects");
+    for (const auto &value : variants) {
+      if (!value.is_object())
+        throw std::runtime_error("frontendVariants must be an array of objects");
+      for (auto it = value.begin(); it != value.end(); ++it)
+        if (it.key() != "sources" && it.key() != "args")
+          throw std::runtime_error("unknown frontendVariants key: " + it.key());
+      FrontendVariant variant;
+      variant.args = read_json_string_array(value, "args", config_path);
+      for (const auto &source : read_json_string_array(value, "sources", config_path))
+        variant.sources.push_back(config_relative_path(config_dir, source));
+      options.frontend_variants.push_back(std::move(variant));
+    }
+  }
   options.inline_annotations = read_json_string_array(document, "inlineAnnotations", config_path);
   if (document.contains("inlineFunctions")) {
     if (!document.at("inlineFunctions").is_boolean())

@@ -69,3 +69,6 @@ jobs:
           CXXFLAGS: ${{ matrix.flags }}
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: ctest --test-dir build --output-on-failure --parallel 2
+
+  backend-package:
+    uses: ./.github/workflows/backend-package.yml

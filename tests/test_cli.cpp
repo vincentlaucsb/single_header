@@ -1,5 +1,21 @@
 #include "test_support.hpp"
 
+TEST_CASE("frontend variants validate their JSON structure", "[config][frontend]") {
+  const auto work = output_dir() / "variant_config_errors";
+  const auto config = work / "single_header.json";
+  nlohmann::json settings{{"includeRoots", {(fixture_dir() / "simple/include").generic_string()}},
+                          {"output", (work / "generated.hpp").generic_string()}};
+  for (const auto &invalid : {nlohmann::json("not an array"), nlohmann::json::array({3}),
+       nlohmann::json::array({{{"args", "not an array"}}}),
+       nlohmann::json::array({{{"sources", {5}}}}),
+       nlohmann::json::array({{{"argz", {"-DFEATURE"}}}})}) {
+    settings["frontendVariants"] = invalid;
+    write_text(config, settings.dump());
+    const auto result = run_result(quote(tool_path()) + " --config " + quote(config));
+    CHECK(result.status != 0);
+  }
+}
+
 TEST_CASE("version uses the project version without loading configuration", "[version]") {
   const auto result = run_result(quote(tool_path()) + " --version --config " +
       quote(output_dir() / "nonexistent-config.json"));
