@@ -1,0 +1,100 @@
+name: Compiler backend package
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        default: ""
+      publish:
+        type: boolean
+        default: false
+jobs:
+  clang-linux:
+    name: linux-x86_64-clang
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.sha }}
+      - name: Install LLVM build dependencies
+        run: |
+          wget -q https://apt.llvm.org/llvm.sh -O "$RUNNER_TEMP/llvm.sh"
+          sudo bash "$RUNNER_TEMP/llvm.sh" 20
+          sudo apt-get install -y llvm-20-dev libclang-20-dev ninja-build patchelf
+      - name: Build compiler backend
+        env:
+          RELEASE_TAG: ${{ inputs.tag || 'test' }}
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=clang++-20 -DBUILD_TESTING=OFF \
+            -DSINGLE_HEADER_WITH_CLANG=ON \
+            -DLLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm \
+            -DClang_DIR=/usr/lib/llvm-20/lib/cmake/clang
+          cmake --build build --parallel 2
+          if [ "$RELEASE_TAG" != test ]; then test "$(build/single_header --version)" = "single_header ${RELEASE_TAG#v}"; fi
+      - name: Package relocatable backend
+        env:
+          RELEASE_TAG: ${{ inputs.tag || 'test' }}
+        run: |
+          stage="$PWD/dist/single_header-$RELEASE_TAG-linux-x86_64-clang"
+          mkdir -p "$stage/bin" "$stage/lib/clang/20" "$stage/licenses"
+          cp build/single_header /usr/lib/llvm-20/bin/clang++ "$stage/bin/"
+          cp -a /usr/lib/llvm-20/lib/clang/20/include "$stage/lib/clang/20/"
+          cp README.md CHANGELOG.md "$stage/"
+          ldd "$stage/bin/single_header" "$stage/bin/clang++" |
+            awk '/=> \// {print $3}' | sort -u > build/runtime-libraries.txt
+          while IFS= read -r library; do
+            case "$(basename "$library")" in
+              libc.so.*|libm.so.*|libpthread.so.*|libdl.so.*|librt.so.*|libstdc++.so.*|libgcc_s.so.*) continue ;;
+            esac
+            cp -L "$library" "$stage/lib/"
+            owners=$(dpkg-query -S "$library" 2>/dev/null ||
+              dpkg-query -S "$(realpath "$library")" 2>/dev/null ||
+              dpkg-query -S "*/$(basename "$library")")
+            package=$(printf '%s\n' "$owners" | head -n1 | cut -d: -f1)
+            cp -L "/usr/share/doc/$package/copyright" "$stage/licenses/$package-copyright"
+          done < build/runtime-libraries.txt
+          cp -L /usr/share/doc/clang-20/copyright "$stage/licenses/clang-20-copyright"
+          for binary in "$stage"/bin/*; do patchelf --set-rpath '$ORIGIN/../lib' "$binary"; done
+          for library in "$stage"/lib/*.so*; do patchelf --set-rpath '$ORIGIN' "$library"; done
+      - name: Test package after relocation
+        env:
+          RELEASE_TAG: ${{ inputs.tag || 'test' }}
+        run: |
+          cp -a "dist/single_header-$RELEASE_TAG-linux-x86_64-clang" "$RUNNER_TEMP/relocated-backend"
+          packaged="$RUNNER_TEMP/relocated-backend/bin"
+          mkdir -p build/package-smoke/include
+          printf '#pragma once\n#include <stddef.h>\n#include <stdint.h>\nint answer();\n' > build/package-smoke/include/api.hpp
+          printf '#include "api.hpp"\nint answer() { return sizeof(uint32_t) == 4 ? 42 : 0; }\n' > build/package-smoke/include/api.cpp
+          cat > build/package-smoke/single_header.json <<'JSON'
+          {"includeRoots":["include"],"output":"generated.hpp","inlineFunctions":true,
+           "functionStitching":"all","frontendArgs":["-std=c++17"],"stitchingReport":"report.json"}
+          JSON
+          # A clean runtime contains no LLVM SDK, so packaged dependencies and
+          # resource headers cannot silently fall back to the build machine.
+          docker run --rm \
+            -v "$RUNNER_TEMP/relocated-backend:/opt/single_header:ro" \
+            -v "$PWD/build/package-smoke:/work" ubuntu:24.04 bash -euxo pipefail -c '
+              apt-get update -qq
+              apt-get install -y -qq g++
+              driver=/opt/single_header/bin/clang++
+              test "$(realpath "$("$driver" -print-resource-dir)")" = /opt/single_header/lib/clang/20
+              cd /tmp
+              /opt/single_header/bin/single_header --config /work/single_header.json
+              cd /work
+              printf "#include \"generated.hpp\"\nint one() { return answer(); }\n" > one.cpp
+              printf "#include \"generated.hpp\"\nint one(); int main() { return answer() == one() && one() == 42 ? 0 : 1; }\n" > two.cpp
+              g++ -std=c++17 one.cpp two.cpp -o consumer
+              ./consumer
+            '
+          jq -e --arg driver /opt/single_header/bin/clang++ \
+            '.configurations[0].arguments[0] == $driver' build/package-smoke/report.json
+      - name: Upload compiler backend
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag || 'test' }}
+        run: |
+          name="single_header-$RELEASE_TAG-linux-x86_64-clang"
+          tar -czf "dist/$name.tar.gz" -C dist "$name"
+          gh release upload "$RELEASE_TAG" "dist/$name.tar.gz" --clobber

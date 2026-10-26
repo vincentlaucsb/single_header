@@ -106,3 +106,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "${{ steps.package.outputs.tag }}" "${{ steps.package.outputs.archive }}" --clobber
+
+  clang-linux:
+    uses: ./.github/workflows/backend-package.yml
+    with:
+      tag: ${{ github.event.release.tag_name || inputs.tag }}
+      publish: true

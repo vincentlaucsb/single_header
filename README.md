@@ -213,12 +213,46 @@ hoisting. The action also
 exposes the installed executable as the `executable` output. Set `run: "false"`
 to install the tool without immediately running it.
 
-For compiler-backed generation, supply `executable: path/to/single_header` to use
-a locally built Clang-enabled binary instead of downloading the lightweight one.
+For compiler-backed generation on Linux x64, select `backend: clang`. That release
+archive includes the Clang driver, resource headers and LLVM/Clang runtime
+libraries. The host still supplies its platform C++ standard library and system
+headers. Other platforms can supply `executable: path/to/single_header` to use a
+locally built Clang-enabled binary. The default `backend: lightweight` retains
+the original small packages.
 The Action forwards `inline-functions`, `function-stitching`,
 `compilation-database`, `frontend-arg`, `stitching-report`, and `inline-annotation`
 to that executable. See [automatic inlining](docs/inline-functions.md) for the
 source-coverage and multi-configuration contract.
+
+All generation settings can live in JSON, so callers can simply run:
+
+```sh
+single_header --config single_header.json
+```
+
+Use `frontendArgs` for the base compiler context. Optional `frontendVariants`
+entries add arguments for selected implementation files; `sources` paths are
+relative to the config file, and omitting `sources` applies a variant to every
+implementation file. Base contexts are always retained. Relative compiler flags
+such as `-Iinclude` resolve from the config directory. For example:
+
+```json
+{
+  "includeRoots": ["include"],
+  "output": "build/library.hpp",
+  "inlineFunctions": true,
+  "functionStitching": "all",
+  "frontendArgs": ["-std=c++20", "-Iinclude"],
+  "frontendVariants": [
+    {"sources": ["include/platform.cpp"], "args": ["-DOTHER_PLATFORM=1"]}
+  ]
+}
+```
+
+Variants require automatic inlining and explicit frontend arguments. Compilation
+databases keep their original working directories. Explicit CLI frontend or
+database options replace the corresponding configured context and variants;
+CLI frontend paths keep resolving from the invocation directory.
 
 ## Development
 

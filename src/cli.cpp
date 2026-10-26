@@ -220,6 +220,15 @@ Options parse_args(int argc, char **argv) {
   if (cli.stitching_set) options.function_stitching = cli.options.function_stitching;
   if (cli.database_set) options.compilation_database = cli.options.compilation_database;
   if (cli.frontend_args_set) options.frontend_args = cli.options.frontend_args;
+  if (cli.database_set && !cli.frontend_args_set) {
+    options.frontend_args.clear();
+    options.frontend_variants.clear();
+  }
+  if (cli.frontend_args_set && !cli.database_set) {
+    options.compilation_database.clear();
+    options.frontend_variants.clear();
+    options.frontend_directory.clear();
+  }
   if (cli.report_set) options.stitching_report = cli.options.stitching_report;
   if (cli.annotations_set) options.inline_annotations = cli.options.inline_annotations;
   if (cli.inline_functions_set) options.inline_functions = cli.options.inline_functions;
