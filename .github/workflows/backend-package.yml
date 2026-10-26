@@ -40,7 +40,7 @@ jobs:
           mkdir -p "$stage/bin" "$stage/lib/clang/20" "$stage/licenses"
           cp build/single_header /usr/lib/llvm-20/bin/clang++ "$stage/bin/"
           cp -a /usr/lib/llvm-20/lib/clang/20/include "$stage/lib/clang/20/"
-          cp LICENSE README.md CHANGELOG.md "$stage/"
+          cp README.md CHANGELOG.md "$stage/"
           ldd "$stage/bin/single_header" "$stage/bin/clang++" |
             awk '/=> \// {print $3}' | sort -u > build/runtime-libraries.txt
           while IFS= read -r library; do
