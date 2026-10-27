@@ -7,14 +7,19 @@
 #include <clang/Tooling/JSONCompilationDatabase.h>
 #include <llvm/Support/Signals.h>
 #include <llvm/Support/FileSystem.h>
+#include <llvm/Support/thread.h>
 #include <nlohmann/json.hpp>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <exception>
 #include <iostream>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 
 namespace fs = std::filesystem;
@@ -36,6 +41,52 @@ fs::path frontend_driver() {
 #endif
   return fs::exists(sibling) ? sibling : fs::path(SINGLE_HEADER_CLANG_BINARY);
 }
+
+// Runs task(i) for every context on up to `jobs` workers, handing out indices
+// in ascending order. A task returning true decides the loop like the serial
+// early exit: contexts after it that have not started are skipped. Returns the
+// first deciding index (or count) and rethrows the first exception in context
+// order, so results never depend on completion order.
+template <class Task>
+std::size_t for_each_context(std::size_t count, unsigned jobs, Task &&task) {
+  std::vector<char> decided(count, 0);
+  std::vector<std::exception_ptr> errors(count);
+  std::atomic<std::size_t> next{0}, limit{count};
+  auto work = [&] {
+    for (std::size_t i = next++; i < count; i = next++) {
+      if (i > limit.load())
+        continue;
+      try {
+        decided[i] = task(i);
+      } catch (...) {
+        errors[i] = std::current_exception();
+        decided[i] = 1;
+      }
+      if (decided[i])
+        for (auto seen = limit.load(); i < seen && !limit.compare_exchange_weak(seen, i);) {
+        }
+    }
+  };
+  const auto workers = std::min<std::size_t>(std::max(jobs, 1u), count);
+  if (workers <= 1)
+    work();
+  else {
+    // Clang and the semantic visitors recurse deeply; match the main thread's
+    // MSVC /STACK reservation rather than platform thread defaults.
+    std::vector<llvm::thread> pool;
+    for (std::size_t i = 0; i < workers; ++i)
+      pool.emplace_back(std::optional<unsigned>(32u << 20), work);
+    for (auto &thread : pool)
+      thread.join();
+  }
+  for (std::size_t i = 0; i < count; ++i) {
+    if (errors[i])
+      std::rethrow_exception(errors[i]);
+    if (decided[i])
+      return i;
+  }
+  return count;
+}
 } // namespace
 
 std::string stitch_functions(const Options &options,
@@ -56,6 +107,8 @@ std::string stitch_functions(const Options &options,
     type_entries += result.type_cache_entries;
   };
   llvm::sys::PrintStackTraceOnErrorSignal("single_header");
+  const unsigned jobs = options.jobs ? options.jobs
+                                     : std::max(1u, std::thread::hardware_concurrency());
   Environment env;
   env.inline_functions = options.inline_functions;
   env.require_cpp17 = options.function_stitching != "off";
@@ -166,17 +219,25 @@ std::string stitch_functions(const Options &options,
   }
   finish_phase("setup");
   std::cerr << "single_header: stitching discovering " << commands.size() << " source contexts\n";
-  for (const auto &command : commands) {
+  originals.resize(commands.size());
+  for_each_context(commands.size(), jobs, [&](std::size_t i) {
+    const auto &original = originals[i] = parse(commands[i], env, nullptr);
+    if (original.errors)
+      throw std::runtime_error("original analysis failed for " +
+                               commands[i].Filename + ":\n" + original.diagnostics);
+    if (!original.inline_problem.empty())
+      throw std::runtime_error(original.inline_problem);
+    return false;
+  });
+  for (unsigned i = 0; i < commands.size(); ++i) {
+    const auto &command = commands[i];
+    const auto &original = originals[i];
     report["configurations"].push_back({{"source", command.Filename},
                                         {"directory", command.Directory},
                                         {"arguments", command.CommandLine}});
-    auto original = parse(command, env, nullptr);
     account(original);
-    if (original.errors)
-      throw std::runtime_error("original analysis failed for " +
-                               command.Filename + ":\n" + original.diagnostics);
-    if (!original.inline_problem.empty())
-      throw std::runtime_error(original.inline_problem);
+    for (const auto &[signature, origins] : original.origins)
+      env.identities.origins[signature].insert(origins.begin(), origins.end());
     for (const auto &edit : original.inline_edits) {
       const auto duplicate = std::find_if(env.inline_edits.begin(), env.inline_edits.end(),
           [&](const Edit &existing) { return existing.where.file == edit.where.file &&
@@ -191,7 +252,6 @@ std::string stitch_functions(const Options &options,
                             candidate.definition.where.begin))
         found->second.reason = "ambiguous_definition";
     }
-    originals.push_back(std::move(original));
   }
   // Populate every original-file provenance entry before recording generated
   // identities. A later TU may introduce an internal declaration absent from an
@@ -278,10 +338,15 @@ std::string stitch_functions(const Options &options,
     legacy = render(inline_overrides);
   finish_phase("discovery");
   std::cerr << "single_header: stitching recording generated baselines\n";
+  baselines.resize(commands.size());
+  for_each_context(commands.size(), jobs, [&](std::size_t i) {
+    baselines[i] = parse(commands[i], env, &legacy);
+    return false;
+  });
   for (unsigned i = 0; i < commands.size(); ++i) {
     const auto &command = commands[i];
     const auto &original = originals[i];
-    auto baseline = parse(command, env, &legacy);
+    const auto &baseline = baselines[i];
     account(baseline);
     // Original TUs discover/classify candidates. Only the generated, unstitched
     // artifact is the relocation baseline: collation can already change the
@@ -318,7 +383,6 @@ std::string stitch_functions(const Options &options,
       baseline_problem = "destination_parse_error";
       baseline_diagnostics = baseline.diagnostics;
     }
-    baselines.push_back(std::move(baseline));
   }
   finish_phase("baseline");
   if (!baseline_problem.empty()) {
@@ -388,43 +452,68 @@ std::string stitch_functions(const Options &options,
       result.reason = "edit_conflict";
     else {
       result.artifact = render(overrides);
-      for (unsigned i = 0; i < commands.size(); ++i) {
-        ++trial_parses;
+      // Contexts run concurrently. The lowest failing context decides, as in
+      // the serial loop, and later contexts that have not started are skipped.
+      struct Outcome {
+        bool parsed = false;
+        std::string reason, diagnostics;
+        std::set<std::string> suspects;
+        std::vector<unsigned> error_offsets;
+        std::size_t type_hits = 0, type_entries = 0;
+      };
+      std::vector<Outcome> outcomes(commands.size());
+      const auto failed = for_each_context(commands.size(), jobs, [&](std::size_t i) {
         const auto tentative = parse(commands[i], env, &result.artifact);
-        account(tentative);
+        auto &outcome = outcomes[i];
+        outcome.parsed = true;
+        outcome.type_hits = tentative.type_cache_hits;
+        outcome.type_entries = tentative.type_cache_entries;
         std::string detail;
         for (const auto *candidate : trial) {
-          result.reason = support_problem(*candidate, tentative);
-          if (!result.reason.empty()) {
+          outcome.reason = support_problem(*candidate, tentative);
+          if (!outcome.reason.empty()) {
             detail = "unsupported relocated function: " + candidate->name + '\n';
-            result.suspects.insert(candidate->id);
+            outcome.suspects.insert(candidate->id);
             break;
           }
         }
-        if (result.reason.empty())
-          result.reason = compare(baselines[i], tentative, &detail);
-        if (!result.reason.empty()) {
-          result.diagnostics = detail + tentative.diagnostics;
-          for (const auto *candidate : trial) {
-            // Attribution is a partitioning hint, never acceptance evidence.
-            // A unique exact emitted replacement provides a bounded range even
-            // after collation; changed/ambiguous text falls back to subdivision.
-            auto replacement = replace_all(candidate->declaration.replacement, "\r\n", "\n");
-            const auto begin = result.artifact.find(replacement);
-            if (!replacement.empty() && begin != std::string::npos &&
-                result.artifact.find(replacement, begin + 1) == std::string::npos)
-              for (const auto offset : tentative.artifact_error_offsets)
-                if (offset >= begin && offset < begin + replacement.size())
-                  result.suspects.insert(candidate->id);
-            const auto &id = candidate->id;
-            if ((result.reason.find("changed_semantics:") == 0 ||
-                 result.reason.find("changed_declaration:") == 0 ||
-                 result.reason.find("missing_definition:") == 0) &&
-                result.reason.size() >= id.size() &&
-                result.reason.compare(result.reason.size() - id.size(), id.size(), id) == 0)
-              result.suspects.insert(id);
-          }
-          break;
+        if (outcome.reason.empty())
+          outcome.reason = compare(baselines[i], tentative, &detail);
+        if (outcome.reason.empty())
+          return false;
+        outcome.diagnostics = detail + tentative.diagnostics;
+        outcome.error_offsets = tentative.artifact_error_offsets;
+        return true;
+      });
+      for (const auto &outcome : outcomes)
+        if (outcome.parsed) {
+          ++trial_parses;
+          type_hits += outcome.type_hits;
+          type_entries += outcome.type_entries;
+        }
+      if (failed < commands.size()) {
+        auto &outcome = outcomes[failed];
+        result.reason = std::move(outcome.reason);
+        result.diagnostics = std::move(outcome.diagnostics);
+        result.suspects = std::move(outcome.suspects);
+        for (const auto *candidate : trial) {
+          // Attribution is a partitioning hint, never acceptance evidence.
+          // A unique exact emitted replacement provides a bounded range even
+          // after collation; changed/ambiguous text falls back to subdivision.
+          auto replacement = replace_all(candidate->declaration.replacement, "\r\n", "\n");
+          const auto begin = result.artifact.find(replacement);
+          if (!replacement.empty() && begin != std::string::npos &&
+              result.artifact.find(replacement, begin + 1) == std::string::npos)
+            for (const auto offset : outcome.error_offsets)
+              if (offset >= begin && offset < begin + replacement.size())
+                result.suspects.insert(candidate->id);
+          const auto &id = candidate->id;
+          if ((result.reason.find("changed_semantics:") == 0 ||
+               result.reason.find("changed_declaration:") == 0 ||
+               result.reason.find("missing_definition:") == 0) &&
+              result.reason.size() >= id.size() &&
+              result.reason.compare(result.reason.size() - id.size(), id.size(), id) == 0)
+            result.suspects.insert(id);
         }
       }
     }
@@ -503,15 +592,22 @@ std::string stitch_functions(const Options &options,
   // Check the exact final accepted batch once more, including residual bodies.
   if (!accepted.empty() || options.inline_functions) {
     std::cerr << "single_header: stitching freshly validating final artifact\n";
-    for (unsigned i = 0; i < commands.size(); ++i) {
+    std::vector<std::size_t> hits(commands.size()), entries(commands.size());
+    for_each_context(commands.size(), jobs, [&](std::size_t i) {
       const auto final_result = parse(commands[i], env, &output);
-      account(final_result);
+      hits[i] = final_result.type_cache_hits;
+      entries[i] = final_result.type_cache_entries;
       for (const auto *candidate : accepted)
         if (!support_problem(*candidate, final_result).empty())
           throw std::runtime_error("final stitching support validation failed; no output was written");
       if (!compare(baselines[i], final_result).empty())
         throw std::runtime_error(
             "final stitching validation failed; no output was written");
+      return false;
+    });
+    for (std::size_t i = 0; i < commands.size(); ++i) {
+      type_hits += hits[i];
+      type_entries += entries[i];
     }
   }
   finish_phase("final");
@@ -531,6 +627,7 @@ std::string stitch_functions(const Options &options,
                       {"skipped", candidates.size() - accepted.size()}};
   report["work"] = {
       {"originalParses", commands.size()}, {"baselineParses", commands.size()},
+      {"jobs", std::min<std::size_t>(jobs, commands.size())},
       {"trialParses", trial_parses}, {"trialAttempts", trial_attempts},
       {"trialCacheHits", cache_hits},
       {"guidedPartitions", guided_partitions},

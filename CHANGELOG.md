@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.0
+
+- Analyze compiler contexts concurrently in every stitching/inline phase with
+  `--jobs N` (JSON `jobs`, Action `jobs`; default: hardware concurrency).
+  Generated output, candidate decisions and diagnostics are independent of the
+  job count; `--jobs 1` restores serial analysis. Reports add `work.jobs`.
+- Give each frontend parse its own physical file system and resolve relative
+  source names against that parse's compile-command directory, so concurrent
+  contexts never depend on or change the process working directory.
+- Spell AST statement classes without Clang's lazily initialized, unsynchronized
+  name table, which could return a null name under concurrent parses.
+
 ## 1.1.1
 
 - Make optimized generation usable directly from a JSON config, including

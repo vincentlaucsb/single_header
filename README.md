@@ -155,6 +155,7 @@ Common options:
 --no-inline-functions         Disable automatic inlining, overriding JSON config.
 --compilation-database <path>  compile_commands.json or its directory.
 --frontend-arg <argument>      Complete frontend arguments instead of a database; repeatable.
+--jobs <n>                     Compiler contexts analyzed concurrently; default: CPU count.
 --stitching-report <path>      Optional versioned JSON analysis report.
 --inline-annotation <name>     Opt in an empty/inline annotation macro; repeatable.
 --help                         Show help.
@@ -220,7 +221,7 @@ headers. Other platforms can supply `executable: path/to/single_header` to use a
 locally built Clang-enabled binary. The default `backend: lightweight` retains
 the original small packages.
 The Action forwards `inline-functions`, `function-stitching`,
-`compilation-database`, `frontend-arg`, `stitching-report`, and `inline-annotation`
+`compilation-database`, `frontend-arg`, `jobs`, `stitching-report`, and `inline-annotation`
 to that executable. See [automatic inlining](docs/inline-functions.md) for the
 source-coverage and multi-configuration contract.
 

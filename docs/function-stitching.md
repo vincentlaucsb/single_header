@@ -106,7 +106,7 @@ build/clang/single_header --include-root include --output dist/library.hpp \
 ```
 
 JSON keys are `functionStitching`, `compilationDatabase`, `frontendArgs`,
-`stitchingReport`, and `inlineAnnotations`. Database/report paths resolve relative
+`stitchingReport`, `inlineAnnotations`, and `jobs`. Database/report paths resolve relative
 to the config file; strings inside `frontendArgs` remain compiler arguments.
 Explicit CLI values override the corresponding config field. The Action forwards
 the same options only when provided. Use its `executable` input with your locally
@@ -275,6 +275,18 @@ emission; no mutable cache is shared across invocations. `work` records actual
 parse counts and cache activity; `phaseMilliseconds` separates discovery, baseline,
 trials and fresh final validation. Run large analyses with an external process
 deadline; in-process frontend cancellation is not implemented.
+
+Compiler contexts are independent, so each phase parses them concurrently on up to
+`--jobs` workers (JSON `jobs`, Action `jobs`; default: hardware concurrency, capped
+at the number of contexts). Each worker holds one AST at a time, so peak memory
+grows with the job count; `--jobs 1` restores serial analysis. Discovery records
+declaration provenance per context and merges it before the shared index is
+frozen; later phases only read it. Results are combined in context order, and a
+trial is decided by its lowest failing context, exactly as the serial loop
+decides it. A failing trial may parse later contexts that serial analysis would
+have skipped, which is the only effect on `work.trialParses`. Generated output,
+candidate decisions, and diagnostics do not depend on the job count. `work.jobs`
+reports the worker count used.
 
 ## Tests and local validation
 

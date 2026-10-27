@@ -912,6 +912,55 @@ TEST_CASE("guided partition reuses an identical failed edit set after reordering
   CHECK(data.at("work").at("finalParses") == 1);
 }
 
+TEST_CASE("parallel contexts reproduce serial output, decisions and diagnostics",
+          "[stitching][contexts][jobs]") {
+  StitchFixture fixture("parallel_contexts");
+  std::string header = "#pragma once\nint bad();\nint run();\n";
+  std::string source = "int helper() { return 1; }\nint bad() { return helper(); }\n"
+                       "int run() {\n#if GENERIC\nauto call = [](auto x) { return x; }; return call(1);\n"
+                       "#else\nreturn 1;\n#endif\n}\n";
+  nlohmann::json commands = nlohmann::json::array();
+  auto add_context = [&](const std::string &file, const char *generic) {
+    commands.push_back({{"directory", fixture.work.generic_string()},
+                        {"file", "include/" + file},
+                        {"arguments", {"clang++", "-std=c++17", std::string("-DGENERIC=") + generic,
+                                       "-c", "include/" + file}}});
+  };
+  add_context("api.cpp", "0");
+  for (int i = 0; i < 5; ++i) {
+    const auto name = "good" + std::to_string(i);
+    header += "int " + name + "();\n";
+    write_text(fixture.include / (name + ".cpp"), "#include \"api.hpp\"\nint " + name +
+               "() { return " + std::to_string(i) + "; }\n");
+    add_context(name + ".cpp", i == 3 ? "1" : "0");
+  }
+  fixture.files(header, source);
+  const auto database = fixture.work / "compile_commands.json";
+  write_text(database, commands.dump());
+  auto command = fixture.command("all", "--compilation-database " + quote(database));
+  const std::string explicit_context = " --frontend-arg -std=c++17";
+  command.erase(command.find(explicit_context), explicit_context.size());
+
+  run_command(command + " --jobs 1");
+  const auto serial_output = read_text(fixture.output);
+  auto serial = nlohmann::json::parse(read_text(fixture.report));
+  run_command(command + " --jobs 4");
+  const auto parallel_output = read_text(fixture.output);
+  auto parallel = nlohmann::json::parse(read_text(fixture.report));
+
+  CHECK(serial.at("work").at("jobs") == 1);
+  CHECK(parallel.at("work").at("jobs") == 4);
+  CHECK(fixture.reason(serial, "bad") == "destination_parse_error");
+  CHECK(fixture.reason(serial, "run") != "accepted");
+  CHECK(fixture.reason(serial, "good4") == "accepted");
+  CHECK(parallel_output == serial_output);
+  for (auto *report : {&serial, &parallel}) {
+    for (const auto *volatile_field : {"phaseMilliseconds", "analysisMilliseconds", "work"})
+      report->erase(volatile_field);
+  }
+  CHECK(parallel == serial);
+}
+
 TEST_CASE("defaulted constructors and global allocation replacements stay deferred",
           "[stitching][expanded]") {
   StitchFixture fixture("special_function_boundaries");

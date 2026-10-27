@@ -4,6 +4,8 @@
 
 #include <clang/Basic/SourceManager.h>
 #include <clang/Lex/Lexer.h>
+#include <llvm/ADT/SmallString.h>
+#include <llvm/Support/VirtualFileSystem.h>
 #include <algorithm>
 #include <fstream>
 #include <stdexcept>
@@ -23,8 +25,13 @@ std::string file_name(SourceLocation loc, const SourceManager &sm) {
   if (loc.isInvalid())
     return {};
   const auto name = sm.getFilename(sm.getExpansionLoc(loc));
-  return name.empty() ? std::string{}
-                      : normalize_path(fs::path(name.str())).generic_string();
+  if (name.empty())
+    return {};
+  // Resolve relative spellings against this parse's working directory (the
+  // compile command's), never the process directory shared by concurrent parses.
+  llvm::SmallString<256> absolute(name);
+  sm.getFileManager().getVirtualFileSystem().makeAbsolute(absolute);
+  return normalize_path(fs::path(absolute.str().str())).generic_string();
 }
 
 Span span(SourceRange range, const SourceManager &sm, const LangOptions &lang,
