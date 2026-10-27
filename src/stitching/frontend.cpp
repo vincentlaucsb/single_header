@@ -22,6 +22,7 @@
 #include <clang/Tooling/CompilationDatabase.h>
 #include <clang/Tooling/Tooling.h>
 #include <llvm/ADT/SmallString.h>
+#include <llvm/Support/VirtualFileSystem.h>
 #include <llvm/Support/raw_ostream.h>
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -162,16 +163,18 @@ struct Collector : RecursiveASTVisitor<Collector> {
   ASTContext &ctx;
   ParseResult &result;
   const Environment &env;
+  IdentityIndex &identities;
   FileIndex &files;
   const EventIndex<TokenInfo> &tokens;
   const EventIndex<Expansion> &expansions;
   SemanticCache semantic_cache;
   bool discover;
   Collector(ASTContext &context, ParseResult &output,
-            const Environment &environment,
+            const Environment &environment, IdentityIndex &identity_index,
             FileIndex &file_index, const EventIndex<TokenInfo> &input_tokens,
             const EventIndex<Expansion> &macro_expansions, bool discovery)
-      : ctx(context), result(output), env(environment), files(file_index), tokens(input_tokens),
+      : ctx(context), result(output), env(environment), identities(identity_index),
+        files(file_index), tokens(input_tokens),
         expansions(macro_expansions), discover(discovery) {}
 
   std::string file_name(SourceLocation location, const SourceManager &sm) const {
@@ -185,7 +188,7 @@ struct Collector : RecursiveASTVisitor<Collector> {
     return files.get(loc, ctx.getSourceManager()).project;
   }
   std::string id(const Decl *decl) {
-    return declaration_identity(decl, ctx, env.identities, semantic_cache);
+    return declaration_identity(decl, ctx, identities, semantic_cache);
   }
   Span definition_span(FunctionDecl *fn) const {
     auto range = fn->getSourceRange();
@@ -205,7 +208,7 @@ struct Collector : RecursiveASTVisitor<Collector> {
     return span(range, ctx.getSourceManager(), ctx.getLangOpts());
   }
   Record record(FunctionDecl *fn) {
-    Record record = function_semantics(fn, ctx, env.identities, semantic_cache);
+    Record record = function_semantics(fn, ctx, identities, semantic_cache);
     auto range = span(fn->getBody()->getSourceRange(),
                        ctx.getSourceManager(), ctx.getLangOpts());
     if (const auto *constructor = dyn_cast<CXXConstructorDecl>(fn))
@@ -257,7 +260,7 @@ struct Collector : RecursiveASTVisitor<Collector> {
     if (!variable->hasInit())
       return true;
     result.declarations["variable:" + id(variable)] =
-        variable_initializer(variable, ctx, env.identities, semantic_cache);
+        variable_initializer(variable, ctx, identities, semantic_cache);
     return true;
   }
   bool VisitCXXRecordDecl(CXXRecordDecl *record) {
@@ -279,7 +282,7 @@ struct Collector : RecursiveASTVisitor<Collector> {
     if (!field->hasInClassInitializer() || !project(field->getLocation()))
       return true;
     result.declarations["field:" + id(field)] =
-        field_initializer(field, ctx, env.identities, semantic_cache);
+        field_initializer(field, ctx, identities, semantic_cache);
     return true;
   }
   bool VisitFunctionTemplateDecl(FunctionTemplateDecl *decl) {
@@ -300,7 +303,7 @@ struct Collector : RecursiveASTVisitor<Collector> {
         return true; // Included in the enclosing body's record.
     const auto key = id(fn);
     result.declarations["type:" + key] =
-        function_type(fn, ctx, env.identities, semantic_cache);
+        function_type(fn, ctx, identities, semantic_cache);
     std::string attributes;
     llvm::raw_string_ostream attribute_output(attributes);
     for (const auto *attribute : fn->attrs())
@@ -311,7 +314,7 @@ struct Collector : RecursiveASTVisitor<Collector> {
       if (fn->getParamDecl(i)->hasDefaultArg() &&
           !fn->getParamDecl(i)->hasUnparsedDefaultArg()) {
         result.declarations["default:" + key + ':' + std::to_string(i)] =
-            default_argument(fn, i, ctx, env.identities, semantic_cache);
+            default_argument(fn, i, ctx, identities, semantic_cache);
       }
     }
     if (!fn->doesThisDeclarationHaveABody())
@@ -629,12 +632,15 @@ struct Diagnostics : DiagnosticConsumer {
 struct Action : ASTFrontendAction {
   ParseResult &result;
   const Environment &env;
+  IdentityIndex &identities;
   std::vector<TokenInfo> tokens;
   std::vector<Expansion> expansions;
   FileIndex files;
   bool discover;
-  Action(ParseResult &output, const Environment &environment, bool discovery)
-      : result(output), env(environment), files(environment), discover(discovery) {}
+  Action(ParseResult &output, const Environment &environment,
+         IdentityIndex &identity_index, bool discovery)
+      : result(output), env(environment), identities(identity_index),
+        files(environment), discover(discovery) {}
   std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &ci,
                                                  llvm::StringRef) override {
     if (env.require_cpp17 && !ci.getLangOpts().CPlusPlus17) {
@@ -743,8 +749,8 @@ struct Action : ASTFrontendAction {
         }
         const EventIndex<TokenInfo> tokens(action.tokens);
         const EventIndex<Expansion> expansions(action.expansions);
-        Collector collector(ctx, action.result, action.env, action.files, tokens,
-                            expansions, action.discover);
+        Collector collector(ctx, action.result, action.env, action.identities,
+                            action.files, tokens, expansions, action.discover);
         collector.TraverseDecl(ctx.getTranslationUnitDecl());
         action.result.type_cache_hits = collector.semantic_cache.type_hits;
         action.result.type_cache_entries = collector.semantic_cache.types.size();
@@ -756,11 +762,14 @@ struct Action : ASTFrontendAction {
 struct Factory : tooling::FrontendActionFactory {
   ParseResult &result;
   const Environment &env;
+  IdentityIndex &identities;
   bool discover;
-  Factory(ParseResult &output, const Environment &environment, bool discovery)
-      : result(output), env(environment), discover(discovery) {}
+  Factory(ParseResult &output, const Environment &environment,
+          IdentityIndex &identity_index, bool discovery)
+      : result(output), env(environment), identities(identity_index),
+        discover(discovery) {}
   std::unique_ptr<FrontendAction> create() override {
-    return std::make_unique<Action>(result, env, discover);
+    return std::make_unique<Action>(result, env, identities, discover);
   }
 };
 struct Database : tooling::CompilationDatabase {
@@ -778,7 +787,19 @@ ParseResult parse(const tooling::CompileCommand &command,
                   const Environment &env, const std::string *artifact) {
   ParseResult result;
   Database database(command);
-  tooling::ClangTool tool(database, {command.Filename});
+  // Concurrent parses must not share the process working directory: the
+  // default real file system follows each command's directory via chdir.
+  tooling::ClangTool tool(database, {command.Filename},
+                          std::make_shared<PCHContainerOperations>(),
+                          llvm::vfs::createPhysicalFileSystem());
+  // Discovery records provenance privately so contexts can run concurrently;
+  // the caller merges result.origins before freezing the shared index.
+  IdentityIndex discovered;
+  if (!env.identities.frozen) {
+    discovered.files = env.identities.files;
+    discovered.artifact = env.identities.artifact;
+  }
+  auto &identities = env.identities.frozen ? env.identities : discovered;
   Diagnostics diagnostics(result, env);
   tool.setDiagnosticConsumer(&diagnostics);
   for (const auto &[path, text] : env.input) {
@@ -790,7 +811,7 @@ ParseResult parse(const tooling::CompileCommand &command,
     tool.mapVirtualFile(env.artifact, *artifact);
     const auto include = "#include " + json(env.artifact).dump() + "\n";
     tool.mapVirtualFile(command.Filename, include);
-    Factory factory(result, env, false);
+    Factory factory(result, env, identities, false);
     if (tool.run(&factory))
       result.errors = true;
     if (!result.artifact_seen) {
@@ -799,10 +820,11 @@ ParseResult parse(const tooling::CompileCommand &command,
           "generated artifact was not entered during destination validation\n";
     }
   } else {
-    Factory factory(result, env, true);
+    Factory factory(result, env, identities, true);
     if (tool.run(&factory))
       result.errors = true;
   }
+  result.origins = std::move(discovered.origins);
   return result;
 }
 

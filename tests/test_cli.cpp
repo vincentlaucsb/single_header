@@ -166,6 +166,33 @@ TEST_CASE("explicit off overrides configured stitching and preserves legacy outp
   CHECK(read_text(work / "result.hpp") == read_text(fixture / "expected.hpp"));
 }
 
+TEST_CASE("jobs accepts bounded integers from CLI and JSON", "[config][jobs]") {
+  const auto work = output_dir() / "jobs_config";
+  const auto fixture = fixture_dir() / "simple";
+  const auto config = work / "single_header.json";
+  nlohmann::json settings{{"includeRoots", {(fixture / "include").generic_string()}},
+                          {"output", (work / "generated.hpp").generic_string()}};
+  const auto args = quote(tool_path()) + " --config " + quote(config);
+  for (const auto *invalid : {"0", "-1", "two", "1025", "4x"}) {
+    write_text(config, settings.dump());
+    const auto result = run_result(args + " --jobs " + invalid);
+    CHECK(result.status != 0);
+    CHECK(result.error.find("--jobs expects an integer from 1 to 1024") != std::string::npos);
+  }
+  for (const auto &invalid : {nlohmann::json(0), nlohmann::json("4"), nlohmann::json(1.5),
+                              nlohmann::json(-2), nlohmann::json(1025)}) {
+    settings["jobs"] = invalid;
+    write_text(config, settings.dump());
+    const auto result = run_result(args);
+    CHECK(result.status != 0);
+    CHECK(result.error.find("must be an integer from 1 to 1024") != std::string::npos);
+  }
+  settings["jobs"] = 3;
+  write_text(config, settings.dump());
+  run_command(args + " --jobs 2");
+  CHECK(read_text(work / "generated.hpp") == read_text(fixture / "expected.hpp"));
+}
+
 TEST_CASE("stitching rejects invalid modes and unavailable compilation contexts", "[stitching][errors]") {
   const auto args = quote(tool_path()) + " --include-root " + quote(fixture_dir() / "simple/include") +
       " --output " + quote(output_dir() / "errors.hpp");

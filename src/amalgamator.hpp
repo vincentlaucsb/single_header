@@ -31,6 +31,7 @@ struct Options {
   std::filesystem::path stitching_report;
   std::vector<std::string> inline_annotations;
   bool inline_functions = false;
+  unsigned jobs = 0; // Concurrent compiler contexts; 0 uses hardware concurrency.
   bool deduplicate_includes = false;
   bool merge_namespaces = false;
   std::string include_guard;

@@ -65,6 +65,9 @@ inputs:
   frontend-arg:
     description: Complete Clang arguments, one argument per line, instead of a compilation database.
     required: false
+  jobs:
+    description: Optional number of compiler contexts analyzed concurrently (1-1024). Omit to use JSON/default hardware concurrency.
+    required: false
   stitching-report:
     description: Optional JSON report path, distinct from inputs and output.
     required: false
@@ -197,6 +200,7 @@ runs:
         INPUT_INLINE_FUNCTIONS: ${{ inputs.inline-functions }}
         INPUT_COMPILATION_DATABASE: ${{ inputs.compilation-database }}
         INPUT_FRONTEND_ARG: ${{ inputs.frontend-arg }}
+        INPUT_JOBS: ${{ inputs.jobs }}
         INPUT_STITCHING_REPORT: ${{ inputs.stitching-report }}
         INPUT_INLINE_ANNOTATION: ${{ inputs.inline-annotation }}
       run: |
@@ -273,6 +277,9 @@ runs:
         }
         $toolArgs = Add-MultilineArgs $toolArgs "--frontend-arg" $env:INPUT_FRONTEND_ARG
         $toolArgs = Add-MultilineArgs $toolArgs "--inline-annotation" $env:INPUT_INLINE_ANNOTATION
+        if ($env:INPUT_JOBS) {
+          $toolArgs += @("--jobs", $env:INPUT_JOBS)
+        }
         if ($env:INPUT_STITCHING_REPORT) {
           $toolArgs += @("--stitching-report", $env:INPUT_STITCHING_REPORT)
         }

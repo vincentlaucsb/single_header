@@ -64,6 +64,8 @@ struct ParseResult {
   std::string diagnostics;
   std::size_t type_cache_hits = 0, type_cache_entries = 0;
   std::vector<unsigned> artifact_error_offsets;
+  // Discovery-only provenance, merged into Environment::identities in context order.
+  std::map<std::string, std::set<std::string>> origins;
 };
 struct PhysicalToken {
   std::string text;

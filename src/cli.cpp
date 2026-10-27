@@ -29,6 +29,7 @@ struct CliOptions {
   bool report_set = false;
   bool annotations_set = false;
   bool inline_functions_set = false;
+  bool jobs_set = false;
   bool deduplicate_includes_set = false;
   bool merge_namespaces_set = false;
   bool include_guard_set = false;
@@ -97,6 +98,14 @@ CliOptions parse_cli_args(int argc, char **argv) {
     } else if (arg == "--inline-functions" || arg == "--no-inline-functions") {
       cli.options.inline_functions = arg == "--inline-functions";
       cli.inline_functions_set = true;
+    } else if (arg == "--jobs") {
+      const auto value = require_value(&i, arg);
+      const bool digits = !value.empty() && value.size() <= 4 &&
+          value.find_first_not_of("0123456789") == std::string::npos;
+      cli.options.jobs = digits ? static_cast<unsigned>(std::stoul(value)) : 0;
+      if (cli.options.jobs < 1 || cli.options.jobs > 1024)
+        throw std::runtime_error("--jobs expects an integer from 1 to 1024");
+      cli.jobs_set = true;
     } else if (arg == "--compilation-database") {
       cli.options.compilation_database = require_value(&i, arg);
       cli.database_set = true;
@@ -169,6 +178,8 @@ Options:
                                 With --inline-functions, multiple commands cover source branches.
   --frontend-arg <argument>      Complete Clang frontend arguments instead of a database.
                                 Repeat for each argument (including -std and include paths).
+  --jobs <n>                     Compiler contexts analyzed concurrently (1-1024).
+                                Default: hardware concurrency. Output is identical.
   --stitching-report <path>      Optional versioned JSON analysis report (never stdout).
   --inline-annotation <name>     Allow a named object macro expanding to empty or inline.
                                 May be repeated; other signature macros are skipped.
@@ -232,6 +243,7 @@ Options parse_args(int argc, char **argv) {
   if (cli.report_set) options.stitching_report = cli.options.stitching_report;
   if (cli.annotations_set) options.inline_annotations = cli.options.inline_annotations;
   if (cli.inline_functions_set) options.inline_functions = cli.options.inline_functions;
+  if (cli.jobs_set) options.jobs = cli.options.jobs;
   if (cli.deduplicate_includes_set) options.deduplicate_includes = cli.options.deduplicate_includes;
   if (cli.merge_namespaces_set) options.merge_namespaces = cli.options.merge_namespaces;
   if (cli.include_guard_set) options.include_guard = cli.options.include_guard;

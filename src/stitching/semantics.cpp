@@ -20,6 +20,22 @@
 using namespace clang;
 
 namespace single_header::stitching {
+namespace {
+// Stmt::getStmtClassName() fills a static table lazily without synchronization,
+// so concurrent parses can observe a null name. Spell the same names directly.
+const char *statement_class_name(const Stmt *stmt) {
+  switch (stmt->getStmtClass()) {
+#define ABSTRACT_STMT(STMT)
+#define STMT(CLASS, PARENT)                                                    \
+  case Stmt::CLASS##Class:                                                     \
+    return #CLASS;
+#include <clang/AST/StmtNodes.inc>
+  default:
+    return "NoStmt";
+  }
+}
+} // namespace
+
 std::string type_name(QualType type, ASTContext &ctx, SemanticCache &cache) {
   if (type.isNull())
     return "<null>";
@@ -353,7 +369,7 @@ struct Semantics : RecursiveASTVisitor<Semantics> {
   }
 
   bool VisitStmt(Stmt *stmt) {
-    item(stmt->getStmtClassName());
+    item(statement_class_name(stmt));
     item(std::to_string(std::distance(stmt->child_begin(), stmt->child_end())));
     // Explicit semantic vocabulary: unknown nodes cause a conservative skip.
     switch (stmt->getStmtClass()) {
@@ -398,7 +414,7 @@ struct Semantics : RecursiveASTVisitor<Semantics> {
                                                                       SubstNonTypeTemplateParmExpr) break;
 #undef SH_NODE
     default:
-      unsupported = std::string("unsupported_ast:") + stmt->getStmtClassName();
+      unsupported = std::string("unsupported_ast:") + statement_class_name(stmt);
     }
     if (const auto *expr = dyn_cast<Expr>(stmt)) {
       item(type_name(expr->getType(), ctx));

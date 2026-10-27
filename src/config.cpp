@@ -2,6 +2,7 @@
 
 #include "helpers.hpp"
 
+#include <cstdint>
 #include <fstream>
 #include <map>
 #include <nlohmann/json.hpp>
@@ -39,7 +40,7 @@ void reject_unknown_config_keys(const json &document, const fs::path &path) {
     "includeRoots", "output", "sources", "rewriteMacros", "implementationMarker", "entry",
     "functionStitching", "compilationDatabase", "frontendArgs", "stitchingReport", "inlineAnnotations",
     "deduplicateIncludes", "includeGuard", "allowMixedIncludes", "mergeNamespaces", "inlineFunctions",
-    "frontendVariants"};
+    "frontendVariants", "jobs"};
 
   for (auto it = document.begin(); it != document.end(); ++it) {
     if (!known_keys.count(it.key())) {
@@ -158,6 +159,12 @@ Options read_config(const fs::path &config_path) {
     if (!document.at("inlineFunctions").is_boolean())
       throw std::runtime_error("inlineFunctions in " + config_path.string() + " must be a boolean");
     options.inline_functions = document.at("inlineFunctions").get<bool>();
+  }
+  if (document.contains("jobs")) {
+    const auto &jobs = document.at("jobs");
+    if (!jobs.is_number_unsigned() || jobs.get<std::uint64_t>() < 1 || jobs.get<std::uint64_t>() > 1024)
+      throw std::runtime_error("jobs in " + config_path.string() + " must be an integer from 1 to 1024");
+    options.jobs = jobs.get<unsigned>();
   }
   options.allow_mixed_includes = read_json_string_array(document, "allowMixedIncludes", config_path);
   if (document.contains("deduplicateIncludes")) {
