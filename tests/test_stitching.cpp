@@ -449,6 +449,7 @@ TEST_CASE("constant evaluation uses the declaration owning a static member initi
 struct Limits { static const int value = 42; };
 template<typename T, T V> struct Integral { static constexpr T value = V; };
 template<typename T, T V> constexpr T Integral<T, V>::value;
+using Integral42 = Integral<int, 42>;
 template<typename T> int dependent() {
   constexpr int value = sizeof(T);
   return value;
@@ -459,7 +460,7 @@ int read_template();
 int read_default();
 )", R"(const int Limits::value;
 int read() { return Limits::value; }
-int read_template() { return Integral<int, 42>::value; }
+int read_template() { return Integral42::value; }
 int read_default() { return argument(); }
 )");
   const auto data = fixture.generate();
