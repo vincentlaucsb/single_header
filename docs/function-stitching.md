@@ -175,6 +175,12 @@ function-try-blocks, defaulted/deleted definitions, global allocation/deallocati
 replacements, virtual methods, constexpr/consteval functions,
 C linkage, variadics, most attributes, indirect calls, generic lambdas, dependent
 expressions, unsupported AST nodes, and internal-linkage dependencies. Dependencies
+on initialized const, non-volatile integral or enumeration variables are allowed
+only for individual references Clang identifies as non-ODR-used constant values.
+Their declaration identity, type, and evaluated integer value must remain equal
+within every supplied frontend context. Address/reference uses, pointer/array
+constants, and mutable or volatile state remain deferred; a permitted value use
+does not exempt another use of the same declaration. Dependencies
 on ordinary library constructors/operators/templates are analyzed by Clang and
 are distinct from relocating their definitions. Inherited `nodiscard` is retained
 from the header declaration; source-only attributes still reject relocation.

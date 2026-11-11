@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.0
+
+- Stitch functions that read integral or enumeration constants by value when
+  Clang proves each use does not ODR-use the constant. Preserve declaration
+  identity, type, and evaluated value in every frontend context.
+- Continue rejecting address/reference uses, pointer and array constants,
+  volatile or mutable state, and mixed safe/unsafe uses of the same constant.
+
 ## 1.2.0
 
 - Analyze compiler contexts concurrently in every stitching/inline phase with
