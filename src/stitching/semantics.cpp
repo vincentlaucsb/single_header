@@ -210,17 +210,21 @@ struct Semantics : RecursiveASTVisitor<Semantics> {
   const APValue *constant_value_use(const DeclRefExpr *reference) {
     // This permission belongs to one expression, not to the declaration: an
     // address/reference use of the same constant must still reject relocation.
-    if (reference->isNonOdrUse() != NOUR_Constant)
+    if (reference->isNonOdrUse() != NOUR_Constant || reference->isValueDependent())
       return nullptr;
     const auto *variable = dyn_cast<VarDecl>(reference->getDecl());
     if (!variable || !variable->getType().isConstQualified() ||
         variable->getType().isVolatileQualified() ||
         !variable->getType()->isIntegralOrEnumerationType())
       return nullptr;
-    variable = variable->getInitializingDeclaration();
-    if (!variable || !variable->isUsableInConstantExpressions(ctx))
+    // A static member's out-of-class definition may have no initializer even
+    // though another redeclaration supplies one. Evaluate its actual owner.
+    const VarDecl *owner = nullptr;
+    const auto *initializer = variable->getAnyInitializer(owner);
+    if (!initializer || initializer->isValueDependent() ||
+        !owner->isUsableInConstantExpressions(ctx))
       return nullptr;
-    const auto *value = variable->evaluateValue();
+    const auto *value = owner->evaluateValue();
     return value && value->isInt() ? value : nullptr;
   }
 
