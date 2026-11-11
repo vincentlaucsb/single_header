@@ -362,6 +362,145 @@ int uses_internal() { return message[0]; }
         "internal_dependency");
 }
 
+TEST_CASE("non-ODR-used scalar constants stitch with multi-TU identity",
+          "[stitching][constants][runtime]") {
+  StitchFixture fixture("constant_values");
+  fixture.files(R"(#pragma once
+namespace constants {
+constexpr int offset = -2;
+const unsigned limit = 42;
+enum class Kind { selected = 7 };
+constexpr Kind kind = Kind::selected;
+int value();
+int selected();
+struct Box { int value() const; };
+}
+)", R"(namespace constants {
+int value() { return offset + limit; }
+int selected() { return static_cast<int>(kind); }
+int Box::value() const { return offset + limit; }
+}
+)");
+  const auto data = fixture.generate();
+  CHECK(data.at("counts").at("removedBodies") == 3);
+  fixture.runtime(
+      "int one() { return constants::value() + constants::selected(); }\n"
+      "int (*address_one())() { return &constants::value; }\n",
+      "int two() { return constants::Box{}.value(); }\n"
+      "int (*address_two())() { return &constants::value; }\n",
+      "int one(); int two(); int (*address_one())(); int (*address_two())();\n"
+      "int main() { return one() == 47 && two() == 40 && "
+      "address_one() == address_two() ? 0 : 1; }\n");
+}
+
+TEST_CASE("constant permissions never cover address reference or mutable uses",
+          "[stitching][constants]") {
+  StitchFixture fixture("constant_unsafe_uses");
+  fixture.files(R"(#pragma once
+namespace constants {
+constexpr int value = 42;
+constexpr char message[] = "text";
+constexpr const char* pointer = "text";
+static volatile const int changing = 42;
+static int state = 42;
+inline int read_reference(const int& input) { return input; }
+inline int runtime_value() { return 42; }
+const int dynamic = runtime_value();
+int safe();
+const int* address();
+const int& reference();
+int argument();
+const int* value_then_address();
+int address_then_value();
+const char* array();
+const char* pointer_value();
+int volatile_value();
+int mutable_value();
+int dynamic_value();
+}
+)", R"(namespace constants {
+int safe() { return value; }
+const int* address() { return &value; }
+const int& reference() { return value; }
+int argument() { return read_reference(value); }
+const int* value_then_address() { int copy = value; (void)copy; return &value; }
+int address_then_value() { const int* ptr = &value; (void)ptr; return value; }
+const char* array() { return message; }
+const char* pointer_value() { return pointer; }
+int volatile_value() { return changing; }
+int mutable_value() { return state; }
+int dynamic_value() { return dynamic; }
+}
+)");
+  const auto data = fixture.generate();
+  CHECK(fixture.reason(data, "constants::safe") == "accepted");
+  for (const auto* name : {"address", "reference", "argument", "value_then_address",
+                           "address_then_value", "array", "pointer_value",
+                           "volatile_value", "mutable_value", "dynamic_value"}) {
+    INFO(name);
+    CHECK(fixture.reason(data, std::string("constants::") + name) == "internal_dependency");
+  }
+}
+
+TEST_CASE("constant stitching preserves bindings even when values agree",
+          "[stitching][constants]") {
+  StitchFixture fixture("constant_bindings");
+  fixture.files(R"(#pragma once
+namespace constants {
+constexpr int value = 42;
+namespace nested {
+int read();
+constexpr int value = 42;
+}
+}
+)", "int constants::nested::read() { return value; }\n");
+  const auto data = fixture.generate();
+  CHECK(fixture.reason(data, "constants::nested::read").find("changed_semantics:") == 0);
+}
+
+TEST_CASE("constant values are validated in every frontend context",
+          "[stitching][constants][config]") {
+  StitchFixture fixture("constant_contexts");
+  fixture.files(R"(#pragma once
+#ifndef CONSTANT_VALUE
+#define CONSTANT_VALUE 7
+#endif
+inline int observe(const int& input) { return input; }
+namespace constants {
+constexpr int value = CONSTANT_VALUE;
+int read();
+}
+)", "int constants::read() { return value; }\n");
+  const auto config = fixture.work / "single_header.json";
+  nlohmann::json settings{{"includeRoots", {"include"}},
+      {"output", "generated.hpp"}, {"stitchingReport", "report.json"},
+      {"inlineFunctions", true}, {"functionStitching", "all"},
+      {"frontendArgs", {"-std=c++17"}},
+      {"frontendVariants", {{{"args", {"-DCONSTANT_VALUE=19"}}}}}};
+  write_text(config, settings.dump());
+  run_command(quote(tool_path()) + " --config " + quote(config));
+  const auto data = nlohmann::json::parse(read_text(fixture.report));
+  CHECK(data.at("configurations").size() == 2);
+  CHECK(fixture.reason(data, "constants::read") == "accepted");
+
+  // An ODR-use in a later context must veto a candidate discovered as safe.
+  write_text(fixture.include / "api.cpp", R"(#include "api.hpp"
+int constants::read() {
+#if CONSTANT_VALUE == 19
+  return observe(value);
+#else
+  return value;
+#endif
+}
+)");
+  run_command(quote(tool_path()) + " --config " + quote(config));
+  const auto rejected = nlohmann::json::parse(read_text(fixture.report));
+  const auto reason = fixture.reason(rejected, "constants::read");
+  REQUIRE(reason != "missing candidate");
+  CHECK(reason != "accepted");
+  CHECK(rejected.at("counts").at("removedBodies") == 0);
+}
+
 TEST_CASE("reports retain source state even when every function is stitched",
           "[stitching][report]") {
   StitchFixture fixture("retained_state");
@@ -715,13 +854,14 @@ TEST_CASE("all original provenance is collected before generated baselines",
                 "int safe() { return 7; }\n");
   // This constant is absent from the first original TU. Every generated context
   // sees it, so baselines must wait until discovery has visited the second TU.
+  // Its value-only use is eligible, but it is not visible at the header site.
   write_text(fixture.include / "z_residual.cpp",
              "#include \"api.hpp\"\nnamespace { const int value = 3; }\n"
              "int residual() { return value; }\n");
   const auto data = fixture.generate();
   CHECK(data.at("baseline") == "valid");
   CHECK(fixture.reason(data, "safe") == "accepted");
-  CHECK(fixture.reason(data, "residual") == "internal_dependency");
+  CHECK(fixture.reason(data, "residual") == "destination_parse_error");
   CHECK(data.at("counts").at("removedBodies") == 1);
 }
 

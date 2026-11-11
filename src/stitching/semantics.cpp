@@ -207,7 +207,24 @@ struct Semantics : RecursiveASTVisitor<Semantics> {
       return "unsupported:" + normalized(printed);
     }
   }
-  std::string identity(const Decl *decl) {
+  const APValue *constant_value_use(const DeclRefExpr *reference) {
+    // This permission belongs to one expression, not to the declaration: an
+    // address/reference use of the same constant must still reject relocation.
+    if (reference->isNonOdrUse() != NOUR_Constant)
+      return nullptr;
+    const auto *variable = dyn_cast<VarDecl>(reference->getDecl());
+    if (!variable || !variable->getType().isConstQualified() ||
+        variable->getType().isVolatileQualified() ||
+        !variable->getType()->isIntegralOrEnumerationType())
+      return nullptr;
+    variable = variable->getInitializingDeclaration();
+    if (!variable || !variable->isUsableInConstantExpressions(ctx))
+      return nullptr;
+    const auto *value = variable->evaluateValue();
+    return value && value->isInt() ? value : nullptr;
+  }
+
+  std::string identity(const Decl *decl, bool constant_value = false) {
     if (!decl) {
       unsupported = "unresolved_identity";
       return "?";
@@ -265,7 +282,7 @@ struct Semantics : RecursiveASTVisitor<Semantics> {
         const bool structured_specialization = function && function->getPrimaryTemplate() &&
             function->getPrimaryTemplate()->getTemplatedDecl()->getLinkageInternal() == Linkage::External &&
             function->getTemplateSpecializationArgs();
-        if (!structured_specialization &&
+        if (!structured_specialization && !constant_value &&
             (value->getLinkageInternal() == Linkage::Internal ||
              value->getLinkageInternal() == Linkage::UniqueExternal))
           internal_dependency = true;
@@ -434,9 +451,16 @@ struct Semantics : RecursiveASTVisitor<Semantics> {
         source_location_fallback(location);
       }
     }
-    if (const auto *reference = dyn_cast<DeclRefExpr>(stmt))
-      item(identity(reference->getDecl()));
     if (const auto *reference = dyn_cast<DeclRefExpr>(stmt)) {
+      const auto *constant = constant_value_use(reference);
+      item(identity(reference->getDecl(), constant != nullptr));
+      if (constant) {
+        item("non-odr-constant-value");
+        item(type_name(reference->getDecl()->getType(), ctx));
+        llvm::SmallString<40> value;
+        constant->getInt().toString(value, 10);
+        item(value.str().str());
+      }
       if (const auto *enumerator =
               dyn_cast<EnumConstantDecl>(reference->getDecl())) {
         llvm::SmallString<40> value;
