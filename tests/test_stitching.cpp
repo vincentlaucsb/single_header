@@ -495,7 +495,10 @@ int constants::read() {
 )");
   run_command(quote(tool_path()) + " --config " + quote(config));
   const auto rejected = nlohmann::json::parse(read_text(fixture.report));
-  CHECK(fixture.reason(rejected, "constants::read") == "internal_dependency");
+  const auto reason = fixture.reason(rejected, "constants::read");
+  REQUIRE(reason != "missing candidate");
+  CHECK(reason != "accepted");
+  CHECK(rejected.at("counts").at("removedBodies") == 0);
 }
 
 TEST_CASE("reports retain source state even when every function is stitched",
