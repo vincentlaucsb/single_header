@@ -442,6 +442,33 @@ int dynamic_value() { return dynamic; }
   }
 }
 
+TEST_CASE("constant evaluation uses the declaration owning a static member initializer",
+          "[stitching][constants]") {
+  StitchFixture fixture("constant_initializer_owner");
+  fixture.files(R"(#pragma once
+struct Limits { static const int value = 42; };
+template<typename T, T V> struct Integral { static constexpr T value = V; };
+template<typename T, T V> constexpr T Integral<T, V>::value;
+template<typename T> int dependent() {
+  constexpr int value = sizeof(T);
+  return value;
+}
+inline int argument(int value = Limits::value) { return value; }
+int read();
+int read_template();
+int read_default();
+)", R"(const int Limits::value;
+int read() { return Limits::value; }
+int read_template() { return Integral<int, 42>::value; }
+int read_default() { return argument(); }
+)");
+  const auto data = fixture.generate();
+  CHECK(data.at("baseline") == "valid");
+  CHECK(fixture.reason(data, "read") == "accepted");
+  CHECK(fixture.reason(data, "read_template") == "accepted");
+  CHECK(fixture.reason(data, "read_default") == "accepted");
+}
+
 TEST_CASE("constant stitching preserves bindings even when values agree",
           "[stitching][constants]") {
   StitchFixture fixture("constant_bindings");

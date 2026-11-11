@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.1
+
+- Fix a Clang-backend crash when constant evaluation encounters an out-of-class
+  static-member definition whose initializer belongs to another declaration.
+  Evaluate the declaration that actually owns the initializer and skip dependent
+  values. This fixes Linux csv-parser generation with libstdc++.
+
 ## 1.3.0
 
 - Stitch functions that read integral or enumeration constants by value when
