@@ -401,7 +401,7 @@ namespace constants {
 constexpr int value = 42;
 constexpr char message[] = "text";
 constexpr const char* pointer = "text";
-volatile const int changing = 42;
+static volatile const int changing = 42;
 static int state = 42;
 inline int read_reference(const int& input) { return input; }
 inline int runtime_value() { return 42; }
@@ -473,7 +473,8 @@ int read();
   const auto config = fixture.work / "single_header.json";
   nlohmann::json settings{{"includeRoots", {"include"}},
       {"output", "generated.hpp"}, {"stitchingReport", "report.json"},
-      {"functionStitching", "all"}, {"frontendArgs", {"-std=c++17"}},
+      {"inlineFunctions", true}, {"functionStitching", "all"},
+      {"frontendArgs", {"-std=c++17"}},
       {"frontendVariants", {{{"args", {"-DCONSTANT_VALUE=19"}}}}}};
   write_text(config, settings.dump());
   run_command(quote(tool_path()) + " --config " + quote(config));
