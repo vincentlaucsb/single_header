@@ -465,6 +465,7 @@ TEST_CASE("constant values are validated in every frontend context",
 #ifndef CONSTANT_VALUE
 #define CONSTANT_VALUE 7
 #endif
+inline int observe(const int& input) { return input; }
 namespace constants {
 constexpr int value = CONSTANT_VALUE;
 int read();
@@ -484,7 +485,6 @@ int read();
 
   // An ODR-use in a later context must veto a candidate discovered as safe.
   write_text(fixture.include / "api.cpp", R"(#include "api.hpp"
-inline int observe(const int& input) { return input; }
 int constants::read() {
 #if CONSTANT_VALUE == 19
   return observe(value);
@@ -854,13 +854,14 @@ TEST_CASE("all original provenance is collected before generated baselines",
                 "int safe() { return 7; }\n");
   // This constant is absent from the first original TU. Every generated context
   // sees it, so baselines must wait until discovery has visited the second TU.
+  // Its value-only use is eligible, but it is not visible at the header site.
   write_text(fixture.include / "z_residual.cpp",
              "#include \"api.hpp\"\nnamespace { const int value = 3; }\n"
              "int residual() { return value; }\n");
   const auto data = fixture.generate();
   CHECK(data.at("baseline") == "valid");
   CHECK(fixture.reason(data, "safe") == "accepted");
-  CHECK(fixture.reason(data, "residual") == "internal_dependency");
+  CHECK(fixture.reason(data, "residual") == "destination_parse_error");
   CHECK(data.at("counts").at("removedBodies") == 1);
 }
 
